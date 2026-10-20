@@ -1,0 +1,239 @@
+// AI 启智课 · 数据模型
+//
+// 刻意**独立于** 301_group：另一个库（aiq_course）、另一个账号（aiq_user）。
+// 这台机器上 301.group 是别人正在用的生产站，共库会一起坏事。
+//
+// 迭代期用 `prisma db push`（无真实数据、改字段快）；
+// 一旦有真实用户数据立刻切 `prisma migrate` —— db push 改列时会静默丢数据，
+// 学生的进度丢了就是事故。
+//
+// ── 关于时间列为什么不用 @default(now()) ──────────────────────
+// 这台 MySQL 的 time_zone 是 SYSTEM = +08:00，而 Prisma 读写 DATETIME 时
+// 一律按 UTC 解释。于是 @default(now()) 生成的 CURRENT_TIMESTAMP(3) 会写进
+// 本地时间，Prisma 再当成 UTC 读出来 —— 每条记录凭空多出 8 小时。
+// 更糟的是**同一列两套写法**：Prisma 客户端侧的 @updatedAt / 显式 new Date()
+// 写的是 UTC，DB 默认值写的是本地时间，混在一列里没法事后补救。
+// 所以所有由数据库生成的默认值统一改成 (UTC_TIMESTAMP(3))，与 Prisma 对齐。
+// （MySQL 8.0.13+ 的表达式默认值必须带括号，去掉括号会语法错误。）
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id              String    @id @default(cuid())
+  email           String    @unique @db.VarChar(191)
+  passwordHash    String    @db.VarChar(100) // bcrypt 60 字符，留足余量
+  nickname        String    @db.VarChar(40)
+  avatarHue       Int       @default(210) // 头像底色色相，前端拿它生成 hsl()
+  /// 上传头像的站内路径（/uploads/avatars/...）。NULL = 用 avatarHue 渐变 + 昵称首字。
+  avatarUrl       String?   @db.VarChar(200)
+  sessionVersion  Int       @default(1) // 改密码/「退出所有设备」时 +1，旧 token 立即失效
+  quizBest        Int       @default(0)
+  emailVerifiedAt DateTime?
+  createdAt       DateTime  @default(dbgenerated("(UTC_TIMESTAMP(3))"))
+  updatedAt       DateTime  @updatedAt
+
+  progress   LabProgress[]
+  works      Work[]
+  likes      WorkLike[]
+  classrooms Classroom[]
+
+  @@map("users")
+}
+
+/// 邮箱注册验证码。三段式的核心：
+///   send-code   存 codeHash = sha256(`${email}:${code}`)，15 分钟 TTL
+///   verify-code 校验通过后把 proofHash 写回**同一行**（不标 usedAt）
+///   register    凭 email+proofHash 定位该行 → 标记已用 + 建号
+/// 这样「邮箱已验证」这个事实被 proof 绑定到了最终的注册请求上，
+/// 别人截获验证码也没用，且天然防重放。
+model EmailRegistrationCode {
+  id        Int       @id @default(autoincrement())
+  email     String    @db.VarChar(191)
+  codeHash  String    @unique @db.VarChar(64) // sha256 hex 恒为 64
+  proofHash String?   @unique @db.VarChar(64)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(dbgenerated("(UTC_TIMESTAMP(3))"))
+
+  @@index([email, createdAt])
+  @@map("email_registration_codes")
+}
+
+/// 进度刻意**拆表**而不是塞一个 Json 字段：
+/// 要按 labId 做原子 upsert + GREATEST 取高分（见 src/routes/progress.ts）。
+/// Json 字段做不到这件事，并发下会丢分。
+model LabProgress {
+  id        Int      @id @default(autoincrement())
+  userId    String   @db.VarChar(30)
+  labId     String   @db.VarChar(64)
+  done      Boolean  @default(false)
+  score     Int?
+  note      String?  @db.VarChar(500)
+  createdAt DateTime @default(dbgenerated("(UTC_TIMESTAMP(3))"))
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, labId])
+  @@index([userId])
+  @@map("lab_progress")
+}
+
+model Work {
+  id          String   @id @default(cuid())
+  userId      String   @db.VarChar(30)
+  title       String   @db.VarChar(120)
+  author      String   @db.VarChar(60)
+  grade       String   @db.VarChar(8)
+  module      String   @db.VarChar(8)
+  type        String   @db.VarChar(32)
+  /// 叫 description 而不是 desc —— `DESC` 是 MySQL 保留字，
+  /// 每次引用都要反引号，迟早有人漏写。API 层再转译回前端的 `desc`。
+  description String   @db.VarChar(1000)
+  /// JSON 数组，存**本站** /uploads/works/ 下的插画路径，不是上游临时 URL：
+  /// 百炼返回的图片链接会过期，提交时必须先落盘（见 lib/work-images.ts）。
+  /// 老作品没有这个字段，NULL = 没有图片，前端退回文字排版。
+  images      String?  @db.Text
+  hue         Int      @default(210)
+  /// 刻意**不**存冗余的 likeCount。
+  ///
+  /// 原本这里有个 `likeCount Int @default(0)`，想法是"避免列表页 N+1 次 count"。
+  /// 但那个担心不成立：Prisma 的 `_count: { select: { likes: true } }` 是一条
+  /// 带子查询的 SQL，不是每行一次 count。而冗余计数会**漂移**——删账号时
+  /// work_likes 靠外键级联消失，别人作品上的 likeCount 却没人去减，
+  /// 数字就此对不上，且没有任何办法自查。宁可每次数，也不要一个会撒谎的缓存。
+  /// 作品先落「个人作品」，再显式发布到成果展厅。
+  /// 训练页保存 ≠ 公开展示：教室里的草稿不该被别的班直接看到。
+  published   Boolean   @default(false)
+  /// 展厅按发布先后排序；撤回时置 NULL，重新发布再取新时间。
+  publishedAt DateTime?
+  hidden      Boolean  @default(false) // 预留：老师/管理员下架用
+  /// 由班级作业发布而来的作品。NULL = 老师自己保存的个人作品。
+  /// 个人作品列表会排除这些行，改由班级作业页管理；它们仍可正常出现在展厅。
+  submissionId String? @unique @db.VarChar(30)
+  createdAt   DateTime @default(dbgenerated("(UTC_TIMESTAMP(3))"))
+  updatedAt   DateTime @updatedAt
+
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  likes      WorkLike[]
+  submission Submission? @relation(fields: [submissionId], references: [id], onDelete: SetNull)
+
+  @@index([published, publishedAt])
+  @@index([published, module, publishedAt])
+  @@index([createdAt])
+  @@index([module, createdAt])
+  @@index([userId, createdAt])
+  @@map("works")
+}
+
+/// 点赞去重不靠应用层判断（并发下会重复），靠这个唯一约束：
+/// create 撞 P2002 即视为「已经点过」，幂等返回。
+model WorkLike {
+  id        Int      @id @default(autoincrement())
+  workId    String   @db.VarChar(30)
+  userId    String   @db.VarChar(30)
+  createdAt DateTime @default(dbgenerated("(UTC_TIMESTAMP(3))"))
+
+  work Work @relation(fields: [workId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workId, userId])
+  @@index([userId])
+  @@map("work_likes")
+}
+
+/// 老师维护的班级。账号没有角色区分，任何登录账号都可以建班；
+/// 学生不注册账号，只通过作业链接里的姓名校验进入。
+model Classroom {
+  id        String   @id @default(cuid())
+  ownerId   String   @db.VarChar(30)
+  name      String   @db.VarChar(60)
+  createdAt DateTime @default(dbgenerated("(UTC_TIMESTAMP(3))"))
+  updatedAt DateTime @updatedAt
+
+  owner       User         @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  members     ClassMember[]
+  assignments Assignment[]
+
+  @@unique([ownerId, name])
+  @@index([ownerId, createdAt])
+  @@map("classrooms")
+}
+
+/// 班级成员名单。姓名在班内唯一：作业链接只凭姓名认人，
+/// 同名会让两个学生落到同一条提交记录上，所以导入时就要求老师区分。
+model ClassMember {
+  id        String   @id @default(cuid())
+  classId   String   @db.VarChar(30)
+  name      String   @db.VarChar(30)
+  createdAt DateTime @default(dbgenerated("(UTC_TIMESTAMP(3))"))
+  updatedAt DateTime @updatedAt
+
+  classroom   Classroom    @relation(fields: [classId], references: [id], onDelete: Cascade)
+  submissions Submission[]
+
+  @@unique([classId, name])
+  @@index([classId])
+  @@map("class_members")
+}
+
+/// 一次作业对应一个不可猜测的公开链接。token 可轮换：
+/// 学生 cookie 里带着签发时的 token，轮换后旧链接和旧会话一起失效。
+model Assignment {
+  id           String   @id @default(cuid())
+  classId      String   @db.VarChar(30)
+  title        String   @db.VarChar(120)
+  /// storybook = AI 绘本创作；lab = 互动练习；task = 课程体系里的活动任务
+  type         String   @db.VarChar(32) @default("storybook")
+  instructions String   @db.VarChar(1000) @default("")
+  /// type=lab 时对应的互动训练 id（如 device-detection）
+  labId        String?  @db.VarChar(40)
+  /// type=task 时的课程定位：m1–m4 / low|mid|high / 活动名称
+  moduleId     String?  @db.VarChar(8)
+  stage        String?  @db.VarChar(8)
+  activity     String?  @db.VarChar(120)
+  /// type=task 时学生可以直接打开的配套工具台（同一模块学段下的训练）
+  toolLabId    String?  @db.VarChar(40)
+  token        String   @unique @db.VarChar(64)
+  status       String   @db.VarChar(16) @default("open") // open | closed
+  createdAt    DateTime @default(dbgenerated("(UTC_TIMESTAMP(3))"))
+  updatedAt    DateTime @updatedAt
+
+  classroom   Classroom    @relation(fields: [classId], references: [id], onDelete: Cascade)
+  submissions Submission[]
+
+  @@index([classId, createdAt])
+  @@map("assignments")
+}
+
+/// 学生提交。content 存提交时的页面快照（文字 + 本站插画路径）。
+/// aiCalls 是每个学生在这份作业上的终身生成次数，防止公开链接被拿来刷生图。
+model Submission {
+  id           String   @id @default(cuid())
+  assignmentId String   @db.VarChar(30)
+  memberId     String   @db.VarChar(30)
+  status       String   @db.VarChar(16) @default("started") // started | submitted
+  content      String?  @db.Text
+  /// 互动练习的完成得分（0–100）；绘本与课程任务不填
+  score        Int?
+  aiCalls      Int      @default(0)
+  startedAt    DateTime @default(dbgenerated("(UTC_TIMESTAMP(3))"))
+  submittedAt  DateTime?
+  createdAt    DateTime @default(dbgenerated("(UTC_TIMESTAMP(3))"))
+  updatedAt    DateTime @updatedAt
+
+  assignment Assignment  @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  member     ClassMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  work       Work?
+
+  @@unique([assignmentId, memberId])
+  @@index([assignmentId, status])
+  @@map("assignment_submissions")
+}
