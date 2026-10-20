@@ -2,10 +2,10 @@
 /**
  * 班级作业浏览器验收：教师建三类作业 + 学生完成三类作业。
  *
- *   E2E_BASE=https://127.0.0.1 E2E_BROWSER_FLAGS=--ignore-certificate-errors \
+ *   E2E_BROWSER_FLAGS_JSON='["--host-resolver-rules=MAP yuehua.online 127.0.0.1"]' \
  *     node scripts/assign-ui-e2e.mjs
  *
- * 页面走 https://127.0.0.1（nginx 默认站点），接口直连 127.0.0.1:3020。
+ * 页面必须使用本站域名（127.0.0.1 的 nginx 默认站点属于其他项目）。
  * 会真的发一封验证码邮件；测试数据在结束时删除。
  */
 import { randomBytes } from 'node:crypto'
@@ -15,7 +15,7 @@ import { join } from 'node:path'
 import { makeChecker, makeClient, registerUser, cleanupUser } from './lib/kit.mjs'
 import { launch } from './lib/cdp-kit.mjs'
 
-const WEB = process.env.E2E_BASE || 'https://127.0.0.1'
+const WEB = process.env.E2E_BASE || 'https://yuehua.online'
 const API = process.env.SMOKE_BASE || 'http://127.0.0.1:3020'
 const EMAIL = process.env.ASSIGN_E2E_EMAIL || '301@301.group'
 const NICKNAME = '作业界面验收'
@@ -161,6 +161,12 @@ try {
   await p.clearCookies()
   await p.goto(`${WEB}/#/assign/${labA.token}`, '!!document.querySelector("form[data-assign-form]")')
   check('学生打开发练习链接看到姓名核对页', await p.evaluate('document.body.textContent.includes("输入你的姓名")'))
+  await p.evaluate(`document.querySelector('form[data-assign-form] button[type="submit"]').click()`)
+  check('空姓名提示并聚焦输入框', await p.evaluate(`document.querySelector('#sbk-assign-name-error').textContent.includes('请先输入') && document.activeElement.id === 'sbk-assign-name'`))
+  await p.evaluate(setValue('#sbk-assign-name', '不在名单内的同学'))
+  await p.evaluate(`document.querySelector('form[data-assign-form] button[type="submit"]').click()`)
+  await p.waitFor(`!!document.querySelector('#sbk-assign-name-error')?.textContent.trim()`, 10000, '姓名不匹配提示')
+  check('姓名不匹配保留输入并关联错误提示', await p.evaluate(`document.querySelector('#sbk-assign-name').value === '不在名单内的同学' && document.querySelector('#sbk-assign-name').getAttribute('aria-invalid') === 'true'`))
   await p.evaluate(setValue('#sbk-assign-name', '小红'))
   await p.evaluate('document.querySelector("form[data-assign-form] button[type=\\"submit\\"]").click()')
   await p.waitFor('!!document.querySelector(\'[data-act="assign-open-lab"]\')', 20_000, '互动练习工作台')
@@ -243,6 +249,47 @@ try {
     await p.evaluate('document.body.textContent.includes("审查提交")'),
   )
   await p.screenshot('/tmp/assign-ui-storybook-compose.png')
+
+  console.log('\n【学生端：真实生成插画 → 审查 → 提交】')
+  for (const [field, value] of Object.entries({ who: '李白', where: '窗前', doing: '抬头望月亮' })) {
+    await p.evaluate(setValue(`[data-field="${field}"]`, value))
+  }
+  await p.evaluate(`document.querySelector('[data-act="generate"]').click()`)
+  await p.waitFor('!!document.querySelector(".sbk-review")', 180_000, '真实插画生成与成书审查')
+  check('真实插画生成后进入成书审查', await p.evaluate(`!!document.querySelector('.sbk-review img[src]')`))
+  check('未确认审查时禁止提交', await p.evaluate(`document.querySelector('[data-act="submit"]').disabled`))
+  await p.evaluate(`document.querySelector('[data-check="review"]').click()`)
+  await p.evaluate(`document.querySelector('[data-act="submit"]').click()`)
+  await p.waitFor('!!document.querySelector(".sbk-submitted")', 30_000, '绘本已提交')
+  check('绘本通过审查后提交并展示成书', await p.evaluate(`document.body.textContent.includes('作业已提交') && !!document.querySelector('.sbk-submitted img')`))
+  await p.screenshot('/tmp/assign-ui-storybook-submitted.png')
+
+  console.log('\n【教师端：预览学生绘本 → 发布展厅 → 撤下】')
+  await p.clearCookies()
+  await p.setCookie('aiq_session', cookieVal, new URL(WEB).origin)
+  await p.goto(`${WEB}/#/me/classes/${classId}/assignments/${storyA.id}`, '!!document.querySelector(".cls-table-card")')
+  await p.evaluate(`document.querySelector('[data-act="open-submission"]').focus(); document.querySelector('[data-act="open-submission"]').click()`)
+  await p.waitFor('!!document.querySelector("[data-act=\\"publish-submission-confirm\\"]")', 15_000, '绘本预览')
+  check('教师预览显示学生真实插画', await p.evaluate(`!!document.querySelector('.cls-page-art img')`))
+  await p.evaluate(`document.querySelector('[data-act="publish-submission-confirm"]').click()`)
+  await p.waitFor('!document.querySelector(".cls-modal") && !!document.querySelector(".cls-chip.is-published")', 15_000, '发布展厅')
+  check('教师通过界面发布学生绘本', true)
+  await p.evaluate(`document.querySelector('[data-act="open-submission"]').click()`)
+  await p.waitFor('!!document.querySelector("[data-act=\\"unpublish-submission\\"]")', 15_000, '已发布预览')
+  check('再次打开预览显示已发布状态', await p.evaluate(`!!document.querySelector('.cls-published-note')`))
+  await p.evaluate(`window.confirm = () => true; document.querySelector('[data-act="unpublish-submission"]').click()`)
+  await p.waitFor('!document.querySelector(".cls-modal") && !document.querySelector(".cls-chip.is-published")', 15_000, '撤下展厅')
+  check('撤下展厅后保留学生提交', await p.evaluate(`!!document.querySelector('[data-act="open-submission"]:not([disabled])')`))
+
+  console.log('\n【学生端：关闭与失效链接】')
+  await p.evaluate(`document.querySelector('[data-act="toggle-assignment"]').click()`)
+  await p.waitFor(`document.querySelector('[data-act="toggle-assignment"]')?.textContent.includes('重新开放')`, 15000, '关闭作业')
+  await p.clearCookies()
+  await p.goto(`${WEB}/#/assign/${storyA.token}`, `document.body.textContent.includes('这份作业已经关闭')`)
+  check('已关闭作业显示原因和重新检查按钮', await p.evaluate(`!!document.querySelector('[data-act="assign-retry"]') && !document.querySelector('form[data-assign-form]')`))
+  const invalidToken = (storyA.token[0] === 'a' ? 'b' : 'a') + storyA.token.slice(1)
+  await p.goto(`${WEB}/#/assign/${invalidToken}`, `!!document.querySelector('.sbk-assign-badge.is-error')`)
+  check('失效链接显示可恢复的错误页面', await p.evaluate(`document.body.textContent.includes('作业打不开') && !!document.querySelector('[data-act="assign-retry"]')`))
 
   console.log('\n【清理】')
   const del = await tcall(`/api/classes/${classId}`, { method: 'DELETE' })

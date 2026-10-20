@@ -13,6 +13,7 @@
  *   sudo node scripts/install-gallery-studio.mjs
  *   sudo node scripts/install-me-studio.mjs
  *   sudo node scripts/install-class-studio.mjs
+ *   sudo node scripts/install-responsive-shell.mjs
  */
 import { readFileSync, writeFileSync, copyFileSync, chownSync, existsSync } from 'node:fs'
 import { createHash } from 'node:crypto'

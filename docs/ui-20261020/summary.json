@@ -1,0 +1,59 @@
+{
+  "production-whole": {
+    "checks": 544,
+    "failures": 0,
+    "measurements": 506
+  },
+  "production-narrow": {
+    "checks": 56,
+    "failures": 0,
+    "measurements": 56
+  },
+  "preview-details": {
+    "checks": 99,
+    "failures": 0,
+    "measurements": 90
+  },
+  "modules": {
+    "class-studio.js": "ce87239c8bf62e6f9c75196d118b846f3dd7761433a4f236a88558f2169d4749",
+    "storybook-studio.js": "8381405a1cfb1b39ae50519a47622b99d9c4ea2721067afd509b3de363b38fcb",
+    "responsive-shell.js": "e441aff491fa9ad9d43c6b54007f378385b9460197bc107e71e51d831455aaf4"
+  },
+  "studentBar390": {
+    "x": 12,
+    "y": 726,
+    "width": 366,
+    "height": 108,
+    "right": 378,
+    "bottom": 834,
+    "paddingBottom": 130,
+    "buttons": [
+      {
+        "tag": "BUTTON",
+        "text": "提交成绩",
+        "cls": "sbk-supervisor-submit",
+        "disabled": false,
+        "inline": false,
+        "x": 193,
+        "y": 780,
+        "width": 82,
+        "height": 44,
+        "right": 275,
+        "bottom": 824
+      },
+      {
+        "tag": "BUTTON",
+        "text": "返回作业",
+        "cls": "sbk-supervisor-back",
+        "disabled": false,
+        "inline": false,
+        "x": 283,
+        "y": 780,
+        "width": 84,
+        "height": 44,
+        "right": 367,
+        "bottom": 824
+      }
+    ]
+  }
+}

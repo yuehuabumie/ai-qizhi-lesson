@@ -458,7 +458,20 @@
     </div>`
   }
 
+  function rememberFocus() {
+    const active = document.activeElement
+    return root?.contains(active) ? { id: active.id, act: active.dataset.act, dataId: active.dataset.id } : null
+  }
+
+  function restoreViewFocus(key) {
+    if (!key || !root) return
+    const target = key.id ? document.getElementById(key.id) : [...root.querySelectorAll('[data-act]')]
+      .find((el) => el.dataset.act === key.act && el.dataset.id === key.dataId)
+    if (target && !target.disabled) target.focus({ preventScroll: true })
+  }
+
   async function loadClasses() {
+    const focus = rememberFocus()
     const my = ++seq
     S.loading = true
     S.error = ''
@@ -469,6 +482,7 @@
       S.classes = data && Array.isArray(data.classes) ? data.classes : []
       if (!root) return
       root.innerHTML = listShell()
+      restoreViewFocus(focus)
       document.title = '班级管理'
     } catch (err) {
       if (my !== seq || !root) return
@@ -635,6 +649,7 @@
   }
 
   async function loadClass() {
+    const focus = rememberFocus()
     const my = ++seq
     S.loading = true
     S.error = ''
@@ -646,6 +661,7 @@
       if (!S.cls) throw new Error('班级不存在或已被删除')
       if (!root) return
       root.innerHTML = classShell()
+      restoreViewFocus(focus)
       document.title = `${S.cls.name} · 班级管理`
     } catch (err) {
       if (my !== seq || !root) return
@@ -826,6 +842,7 @@
   }
 
   async function loadAssignment() {
+    const focus = rememberFocus()
     const my = ++seq
     S.loading = true
     S.error = ''
@@ -839,6 +856,7 @@
       if (!S.assignment) throw new Error('作业不存在或已被删除')
       if (!root) return
       root.innerHTML = assignmentShell()
+      restoreViewFocus(focus)
       document.title = `${S.assignment.title} · 作业完成情况`
     } catch (err) {
       if (my !== seq || !root) return
@@ -881,8 +899,9 @@
   // ── 弹层 ───────────────────────────────────────────────────
   let modalEl = null
   let modalCleanup = null
+  let modalReturnFocus = null
 
-  function closeModal() {
+  function closeModal({ restoreFocus = true } = {}) {
     if (modalCleanup) {
       try {
         modalCleanup()
@@ -895,14 +914,36 @@
       modalEl.remove()
       modalEl = null
     }
+    if (restoreFocus) {
+      if (modalReturnFocus && modalReturnFocus.isConnected) modalReturnFocus.focus({ preventScroll: true })
+      modalReturnFocus = null
+    }
   }
 
   function openModal(html, onReady) {
-    closeModal()
+    const returnFocus = modalReturnFocus || document.activeElement
+    closeModal({ restoreFocus: false })
+    modalReturnFocus = returnFocus
     modalEl = document.createElement('div')
     modalEl.className = 'cls-modal-backdrop'
     modalEl.innerHTML = `<div class="cls-modal" role="dialog" aria-modal="true">${html}</div>`
     document.body.appendChild(modalEl)
+    const backdrop = modalEl
+    const dialog = backdrop.querySelector('.cls-modal')
+    dialog.tabIndex = -1
+    const title = dialog.querySelector('h2')
+    if (title) {
+      title.id = 'cls-modal-title'
+      dialog.setAttribute('aria-labelledby', title.id)
+    } else dialog.setAttribute('aria-label', '正在加载作品')
+    const background = [...document.body.children].filter((el) => el !== backdrop && el instanceof HTMLElement)
+      .map((el) => [el, el.inert])
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const focusables = () => [...dialog.querySelectorAll('a[href],button,input,select,textarea,[tabindex]')]
+      .filter((el) => !el.disabled && el.tabIndex >= 0 && el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden')
+    ;(dialog.querySelector('input:not([disabled]),textarea:not([disabled])') || focusables()[0] || dialog).focus({ preventScroll: true })
+    background.forEach(([el]) => { el.inert = true })
     // 弹层挂在 body 上，不在页面 root 里，事件要单独委托
     const onModalClick = (e) => {
       if (e.target === modalEl) return closeModal()
@@ -910,20 +951,32 @@
     }
     const onModalSubmit = (e) => onSubmit(e)
     const onKey = (e) => {
-      if (e.key === 'Escape') closeModal()
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        closeModal()
+      } else if (e.key === 'Tab') {
+        const items = focusables(), first = items[0], last = items[items.length - 1]
+        if (!first) { e.preventDefault(); dialog.focus(); return }
+        if (e.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) {
+          e.preventDefault(); last.focus()
+        } else if (!e.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) {
+          e.preventDefault(); first.focus()
+        }
+      }
     }
     modalEl.addEventListener('click', onModalClick)
     modalEl.addEventListener('submit', onModalSubmit)
-    document.addEventListener('keydown', onKey)
+    document.addEventListener('keydown', onKey, true)
     modalCleanup = () => {
       if (modalEl) {
         modalEl.removeEventListener('click', onModalClick)
         modalEl.removeEventListener('submit', onModalSubmit)
       }
-      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('keydown', onKey, true)
+      background.forEach(([el, inert]) => { el.inert = inert })
+      document.body.style.overflow = previousOverflow
     }
-    const focusable = modalEl.querySelector('input, textarea, button')
-    if (focusable) setTimeout(() => focusable.focus(), 30)
     if (onReady) onReady(modalEl)
   }
 
@@ -1063,7 +1116,7 @@
                </div>
                <div class="cls-modal-foot-actions">
                  <button type="button" class="cls-btn cls-ghost" data-act="close-modal">取消</button>
-                 <button type="button" class="cls-btn cls-primary" data-act="publish-submission-confirm" data-id="${esc(sub.id)}">${svgIcon('upload')}发布到成果展厅</button>
+                 <button type="button" class="cls-btn cls-primary" data-busy="publish:${esc(sub.id)}" data-act="publish-submission-confirm" data-id="${esc(sub.id)}">${svgIcon('upload')}发布到成果展厅</button>
                </div>`
         }
       </div>`
@@ -1072,15 +1125,19 @@
   async function openSubmission(submissionId) {
     if (!submissionId) return
     openModal(`<div class="cls-modal-loading"><span class="cls-spinner"></span>正在加载作品…</div>`)
+    const loadingModal = modalEl
+    const requestSeq = seq
     try {
       const data = await api(
         `/api/classes/${encodeURIComponent(S.classId)}/assignments/${encodeURIComponent(S.assignmentId)}/submissions/${encodeURIComponent(submissionId)}`,
       )
+      if (modalEl !== loadingModal || requestSeq !== seq || !root) return
       const sub = data && data.submission
       if (!sub) throw new Error('提交记录不存在或已被删除')
       openModal(submissionModalHtml(sub))
     } catch (err) {
-      if (modalEl) closeModal()
+      if (modalEl !== loadingModal || requestSeq !== seq || !root) return
+      closeModal()
       showToast(err.message || '作品加载失败')
     }
   }
@@ -1100,10 +1157,12 @@
 
   function syncBusy() {
     if (!root) return
-    root.querySelectorAll('[data-busy]').forEach((el) => {
+    const controls = [...root.querySelectorAll('[data-busy]'), ...(modalEl ? modalEl.querySelectorAll('[data-busy]') : [])]
+    controls.forEach((el) => {
       const key = el.getAttribute('data-busy')
       el.disabled = S.busy.has(key)
       el.classList.toggle('is-busy', S.busy.has(key))
+      el.setAttribute('aria-busy', String(S.busy.has(key)))
     })
   }
 
@@ -1832,6 +1891,7 @@
   const CSS_TEXT = `
 .cls-studio-root,.cls-modal-backdrop,.cls-toast{
   --cls-accent:var(--aiq-accent,#3559f6);
+  --cls-action:#3559f6;
   --cls-border:var(--aiq-border,#e4e8f2);
   --cls-card:var(--aiq-panel-solid,#fff);
   --cls-soft:var(--aiq-bg-soft,#f2f5fc);
@@ -1872,7 +1932,7 @@
 .cls-btn:hover{border-color:color-mix(in srgb,var(--cls-accent) 40%,var(--cls-border));color:var(--cls-accent)}
 .cls-btn:disabled,.cls-btn.is-disabled{opacity:.45;cursor:not-allowed;pointer-events:none}
 .cls-btn .cls-i{width:16px;height:16px}
-.cls-primary{background:var(--cls-accent);border-color:var(--cls-accent);color:#fff;box-shadow:0 8px 20px color-mix(in srgb,var(--cls-accent) 28%,transparent)}
+.cls-primary{background:var(--cls-action);border-color:var(--cls-action);color:#fff;box-shadow:0 8px 20px color-mix(in srgb,var(--cls-accent) 28%,transparent)}
 .cls-primary:hover{color:#fff;filter:brightness(1.05)}
 .cls-ghost{background:transparent}
 .cls-danger-ghost{background:transparent;border-color:#fecaca;color:var(--cls-danger)}
@@ -1927,7 +1987,7 @@
 .cls-member{display:flex;align-items:center;gap:10px;padding:9px 2px;border-bottom:1px solid var(--cls-border);min-height:44px}
 .cls-member-index{width:24px;font-size:12px;color:var(--cls-mute);font-variant-numeric:tabular-nums;text-align:right}
 .cls-member-name{flex:1;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.cls-member-actions{display:flex;gap:2px;opacity:.55;transition:.15s}
+.cls-member-actions{display:flex;gap:4px;opacity:1;transition:.15s}
 .cls-member:hover .cls-member-actions{opacity:1}
 .cls-icon-btn{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border:0;border-radius:8px;background:transparent;color:var(--cls-mute);cursor:pointer;transition:.15s}
 .cls-icon-btn:hover{background:var(--cls-soft);color:var(--cls-accent)}
@@ -1965,8 +2025,8 @@
 .cls-chip.is-done,.cls-chip.is-open,.cls-chip.is-published{background:#ecfdf5;color:#047857}
 .cls-chip.is-doing{background:#fffbeb;color:#b45309}
 .cls-chip.is-idle{background:var(--cls-soft);color:var(--cls-mute)}
-[data-theme="dark"] .cls-chip.is-done,[data-theme="dark"] .cls-chip.is-open,[data-theme="dark"] .cls-chip.is-published{background:rgba(16,185,129,.15);color:#6ee7b7}
-[data-theme="dark"] .cls-chip.is-doing{background:rgba(245,158,11,.16);color:#fcd34d}
+.dark .cls-chip.is-done,.dark .cls-chip.is-open,.dark .cls-chip.is-published{background:rgba(16,185,129,.15);color:#6ee7b7}
+.dark .cls-chip.is-doing{background:rgba(245,158,11,.16);color:#fcd34d}
 
 .cls-instructions{display:flex;gap:14px;margin-bottom:16px;align-items:flex-start}
 .cls-instructions > .cls-i{width:22px;height:22px;color:var(--cls-accent);margin-top:2px}
@@ -1980,7 +2040,7 @@
 .cls-share-row{display:flex;gap:10px;flex-wrap:wrap}
 .cls-share-input{flex:1 1 320px;font-size:13px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .cls-share .cls-hint{margin-top:10px}
-[data-theme="dark"] .cls-share-input{background:rgba(255,255,255,.04)}
+.dark .cls-share-input{background:rgba(255,255,255,.04)}
 
 .cls-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
 .cls-stat{display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding:16px 18px;border:1px solid var(--cls-border);border-radius:15px;background:var(--cls-card)}
@@ -2014,22 +2074,22 @@
 
 .cls-modal-backdrop{position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(15,23,42,.46);backdrop-filter:blur(3px);animation:cls-fade .16s ease}
 .cls-modal{width:min(760px,100%);max-height:min(88vh,860px);display:flex;flex-direction:column;background:var(--cls-card);color:var(--cls-text);border-radius:20px;box-shadow:0 28px 80px rgba(15,23,42,.32);overflow:hidden;animation:cls-pop .18s ease}
-.cls-modal-form{padding:24px;display:flex;flex-direction:column;gap:16px}
+.cls-modal-form{min-height:0;overflow:auto;overscroll-behavior:contain;padding:24px;display:flex;flex-direction:column;gap:16px}
 .cls-modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding:22px 24px 0}
 .cls-modal-form .cls-modal-head{padding:0}
 .cls-modal-head h2{margin:0;font-size:19px;line-height:1.35}
 .cls-modal-sub{margin:4px 0 0;font-size:13px;color:var(--cls-mute)}
 .cls-modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:4px}
-.cls-modal-body{padding:18px 24px;overflow:auto;flex:1}
+.cls-modal-body{min-height:0;overscroll-behavior:contain;padding:18px 24px;overflow:auto;flex:1}
 .cls-modal-foot{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;padding:16px 24px 20px;border-top:1px solid var(--cls-border);flex-wrap:wrap}
 .cls-modal-foot-actions{display:flex;gap:10px}
-.cls-author-field{flex:1 1 300px;display:flex;flex-direction:column;gap:6px;min-width:240px}
+.cls-author-field{flex:1 1 300px;display:flex;flex-direction:column;gap:6px;min-width:0}
 .cls-author-field label{font-size:13px;font-weight:650;color:var(--cls-soft-text)}
 .cls-modal-loading{display:flex;align-items:center;justify-content:center;gap:12px;padding:70px 24px;color:var(--cls-mute)}
 .cls-spinner{width:20px;height:20px;border:2.5px solid var(--cls-border);border-top-color:var(--cls-accent);border-radius:50%;animation:cls-spin .7s linear infinite;display:inline-block}
 .cls-published-note{display:flex;align-items:center;gap:8px;padding:10px 14px;margin-bottom:14px;border-radius:11px;background:#ecfdf5;color:#047857;font-size:13px;font-weight:600}
 .cls-published-note .cls-i{width:16px;height:16px}
-[data-theme="dark"] .cls-published-note{background:rgba(16,185,129,.15);color:#6ee7b7}
+.dark .cls-published-note{background:rgba(16,185,129,.15);color:#6ee7b7}
 .cls-pages{display:flex;flex-direction:column;gap:14px}
 .cls-page{display:grid;grid-template-columns:minmax(160px,42%) 1fr;gap:16px;align-items:stretch;border:1px solid var(--cls-border);border-radius:14px;overflow:hidden}
 .cls-page-art{background:var(--cls-soft);min-height:150px;display:flex;align-items:center;justify-content:center;color:var(--cls-mute);font-size:12.5px;text-align:center}
@@ -2083,7 +2143,8 @@
   .cls-page{grid-template-columns:1fr}
   .cls-page-text{padding:0 14px 14px}
   .cls-page-art img{max-height:220px}
-  .cls-filters{width:100%}
+  .cls-table-tools{width:100%}
+  .cls-table-tools .cls-select{flex:1;min-width:0}
   .cls-search{width:100%}
   .cls-table,.cls-table tbody,.cls-table tr,.cls-table td{display:block}
   .cls-table thead{display:none}
@@ -2103,6 +2164,33 @@
   .cls-kind-fields{grid-template-columns:1fr}
   .cls-lab-summary{flex-direction:column;align-items:flex-start}
   .cls-task-gallery{grid-template-columns:repeat(2,1fr)}
+}
+
+
+/* Theme tokens follow the same html.dark class as the Vue application. */
+.dark .cls-studio-root,.dark .cls-modal-backdrop,.dark .cls-toast{
+  --cls-accent:#9baaff;--cls-danger:#fca5a5;--cls-ok:#6ee7b7;--cls-warn:#fcd34d;
+}
+.dark .cls-stat-icon.is-done{background:rgba(16,185,129,.15);color:var(--cls-ok)}
+.dark .cls-stat-icon.is-doing{background:rgba(245,158,11,.16);color:var(--cls-warn)}
+.dark .cls-empty-icon.is-danger,.dark .cls-icon-btn.is-danger:hover{background:rgba(239,68,68,.12)}
+.cls-studio-root :is(a,button,input,select,textarea):focus-visible,
+.cls-modal :is(a,button,input,select,textarea):focus-visible{outline:2px solid var(--cls-accent);outline-offset:3px}
+.cls-title,.cls-sub,.cls-class-name,.cls-instructions p,.cls-modal-head h2,.cls-page-text p{overflow-wrap:anywhere}
+.cls-modal-head,.cls-modal-foot{flex-shrink:0}
+.cls-member-actions{flex-shrink:0}
+@media (max-width:1023px), (pointer:coarse){
+  .cls-btn,.cls-sm,.cls-back{min-height:44px}
+  .cls-icon-btn{width:44px;height:44px;flex-shrink:0}
+  .cls-input,.cls-textarea,.cls-select{min-height:44px;font-size:16px}
+  .cls-select{background-position:calc(100% - 17px) 19px,calc(100% - 12px) 19px}
+}
+@media (max-height:500px){
+  .cls-modal-backdrop{padding:12px}
+  .cls-modal{max-height:calc(100dvh - 24px)}
+}
+@media (prefers-reduced-motion:reduce){
+  .cls-studio-root *,.cls-modal-backdrop *,.cls-toast{animation:none!important;transition:none!important}
 }
 
 /* 顶部主导航多一个标签后，1024–1365 宽度收紧内边距，避免横向溢出 */

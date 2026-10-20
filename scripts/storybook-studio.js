@@ -270,6 +270,7 @@
     saved: null,
     barEl: null,
     barClick: null,
+    barResize: null,
     labResult: null,
     producedWork: null,
     markAt: 0,
@@ -557,9 +558,20 @@
     supervisor.barEl = bar
     supervisor.barClick = onClick
     document.body.appendChild(bar)
+    if (typeof ResizeObserver === 'function') {
+      supervisor.barResize = new ResizeObserver(() => {
+        if (!bar.getClientRects().length) return
+        const height = bar.getBoundingClientRect().height
+        const bottom = parseFloat(getComputedStyle(bar).bottom) || 0
+        document.body.style.setProperty('--sbk-supervisor-space', `${Math.ceil(height + bottom + 12)}px`)
+      })
+      supervisor.barResize.observe(bar)
+    }
   }
 
   function removeSupervisorBar() {
+    if (supervisor.barResize) supervisor.barResize.disconnect()
+    supervisor.barResize = null
     if (supervisor.barEl) {
       if (supervisor.barClick) supervisor.barEl.removeEventListener('click', supervisor.barClick)
       supervisor.barEl.remove()
@@ -567,6 +579,7 @@
     supervisor.barEl = null
     supervisor.barClick = null
     document.body.classList.remove('sbk-supervisor-on')
+    document.body.style.removeProperty('--sbk-supervisor-space')
   }
 
   function updateSupervisorBar() {
@@ -939,12 +952,15 @@
 
   // ── 二次确认弹层 ───────────────────────────────────────────
   // 弹层挂在 body 上而不是 root 里：render() 会重建 root，焦点会丢。
+  let modalBackgroundRestore = null
   function closeConfirm(restoreFocus) {
     if (!modalEl) return
     document.removeEventListener('keydown', modalKey, true)
     modalKey = null
     modalEl.remove()
     modalEl = null
+    if (modalBackgroundRestore) modalBackgroundRestore()
+    modalBackgroundRestore = null
     if (restoreFocus !== false && modalPrevFocus && document.contains(modalPrevFocus)) {
       try {
         modalPrevFocus.focus()
@@ -1001,6 +1017,16 @@
     document.addEventListener('keydown', modalKey, true)
     document.body.appendChild(wrap)
     modalEl = wrap
+    const background = [...document.body.children].filter((el) => el !== wrap && el instanceof HTMLElement)
+      .map((el) => [el, el.inert])
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    cancelBtn.focus({ preventScroll: true })
+    background.forEach(([el]) => { el.inert = true })
+    modalBackgroundRestore = () => {
+      background.forEach(([el, inert]) => { el.inert = inert })
+      document.body.style.overflow = previousOverflow
+    }
     requestAnimationFrame(() => {
       if (modalEl === wrap) cancelBtn.focus()
     })
@@ -1753,10 +1779,10 @@
         ${meta.instructions ? `<div class="sbk-assign-instructions"><b>作业要求</b><p>${esc(meta.instructions)}</p></div>` : ''}
         <form class="sbk-assign-form" data-assign-form novalidate>
           <label for="sbk-assign-name">输入你的姓名</label>
-          <input class="sbk-assign-input" id="sbk-assign-name" name="name" maxlength="30" autocomplete="name" value="${esc(state.assignName)}" placeholder="要和老师名单里的姓名一致">
+          <input class="sbk-assign-input" id="sbk-assign-name" name="name" maxlength="30" autocomplete="name" aria-describedby="sbk-assign-name-error" aria-invalid="${!!state.assignError}" value="${esc(state.assignName)}" placeholder="要和老师名单里的姓名一致">
           <button type="submit" class="sbk-primary sbk-assign-btn" ${state.assignBusy ? 'disabled' : ''}>${state.assignBusy ? '<span class="sbk-spinner" aria-hidden="true"></span>正在核对…' : '开始作业'}</button>
         </form>
-        <p class="sbk-assign-error" role="alert">${esc(state.assignError || '')}</p>
+        <p class="sbk-assign-error" id="sbk-assign-name-error" role="alert">${esc(state.assignError || '')}</p>
         <p class="sbk-assign-hint">${hint}</p>
       </div>
     </div>`
@@ -2508,6 +2534,7 @@
     if (!name) {
       state.assignError = '请先输入你的姓名'
       render()
+      document.getElementById('sbk-assign-name')?.focus()
       return
     }
     if (state.assignBusy) return
@@ -2534,6 +2561,7 @@
       state.assignBusy = false
       state.assignError = errorMessage(e, '姓名核对失败，请重试')
       render()
+      document.getElementById('sbk-assign-name')?.focus()
     }
   }
 
@@ -2818,7 +2846,7 @@
 .sbk-step.done .sbk-step-num{background:rgba(22,163,74,.12);color:#15803d}
 .sbk-step-num{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;font-size:13px;font-weight:800;background:var(--sbk-soft);color:var(--sbk-muted);flex:none}
 .sbk-step-num .sbk-i{font-size:17px}
-.sbk-step.active .sbk-step-num{background:var(--sbk-accent);color:#fff}
+.sbk-step.active .sbk-step-num{background:var(--sbk-action,#3559f6);color:#fff}
 .sbk-step-text{display:flex;flex-direction:column;line-height:1.25}
 .sbk-step-text b{font-size:12.5px}
 .sbk-step-text > span{font-size:11px;color:var(--sbk-muted)}
@@ -2834,7 +2862,7 @@
 .sbk-poems{display:flex;flex-wrap:wrap;gap:8px}
 .sbk-poem{border:1px solid var(--sbk-border);background:var(--sbk-soft);color:var(--aiq-text);border-radius:999px;padding:9px 17px;min-height:40px;font-size:13px;font-weight:600;cursor:pointer;transition:.18s}
 .sbk-poem:hover{border-color:rgba(53,89,246,.35);color:var(--sbk-accent)}
-.sbk-poem.on{background:var(--sbk-accent);border-color:var(--sbk-accent);color:#fff;box-shadow:0 8px 18px -10px rgba(53,89,246,.7)}
+.sbk-poem.on{background:var(--sbk-action,#3559f6);border-color:var(--sbk-action,#3559f6);color:#fff;box-shadow:0 8px 18px -10px rgba(53,89,246,.7)}
 .sbk-tabs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px}
 .sbk-tab{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--sbk-border);background:transparent;color:var(--sbk-muted);border-radius:10px;padding:7px 12px;min-height:36px;font-size:12px;font-weight:600;cursor:pointer}
 .sbk-tab:hover{border-color:rgba(53,89,246,.35)}
@@ -2867,7 +2895,7 @@
 .sbk-btn:hover{border-color:rgba(53,89,246,.4);color:var(--sbk-accent)}
 .sbk-btn-danger:hover{border-color:rgba(220,38,38,.4);color:#dc2626}
 .sbk-btn-mini{padding:5px 10px;min-height:30px;font-size:11px}
-.sbk-primary{border:none;border-radius:999px;padding:13px 24px;background:linear-gradient(135deg,var(--sbk-accent),#7c5cff);color:#fff;font-size:15px;font-weight:800;cursor:pointer;box-shadow:0 14px 26px -12px rgba(53,89,246,.65);transition:.18s;display:inline-flex;align-items:center;justify-content:center;gap:6px}
+.sbk-primary{border:none;border-radius:999px;padding:13px 24px;background:linear-gradient(135deg,var(--sbk-action,#3559f6),#7c5cff);color:#fff;font-size:15px;font-weight:800;cursor:pointer;box-shadow:0 14px 26px -12px rgba(53,89,246,.65);transition:.18s;display:inline-flex;align-items:center;justify-content:center;gap:6px}
 .sbk-primary:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 18px 30px -12px rgba(53,89,246,.7)}
 .sbk-cta-card{display:flex;flex-direction:column;align-items:stretch;gap:10px}
 .sbk-cta{width:100%}
@@ -3154,7 +3182,7 @@
 .sbk-success-card.is-work .sbk-note{text-align:center}
 .sbk-success-card.is-work .sbk-submit-preview .sbk-note{text-align:left;margin:0}
 /* 学生作业：互动练习页悬浮条 */
-body.sbk-supervisor-on{padding-bottom:calc(96px + env(safe-area-inset-bottom,0px)) !important}
+body.sbk-supervisor-on{padding-bottom:calc(var(--sbk-supervisor-space,96px) + env(safe-area-inset-bottom,0px)) !important}
 .sbk-supervisor{position:fixed;left:50%;bottom:max(16px,env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:9900;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px 14px;box-sizing:border-box;width:min(760px,calc(100% - 24px));padding:10px 12px 10px 14px;border-radius:16px;border:1px solid var(--aiq-border,#e4e8f2);background:var(--aiq-panel-solid,#fff);color:var(--aiq-text,#182033);box-shadow:0 18px 46px -18px rgba(18,30,60,.5)}
 .sbk-supervisor-main{display:flex;align-items:center;gap:10px;min-width:0;flex:1}
 .sbk-supervisor-badge{width:36px;height:36px;flex:none;border-radius:11px;display:grid;place-items:center;font-size:18px;color:#fff;background:linear-gradient(135deg,#3559f6,#7c5cff);box-shadow:0 8px 18px -10px rgba(53,89,246,.7)}
@@ -3217,11 +3245,28 @@ body.sbk-supervisor-on{padding-bottom:calc(96px + env(safe-area-inset-bottom,0px
   .sbk-task-photos{grid-template-columns:repeat(3,minmax(0,1fr))}
   .sbk-assign-actions .sbk-primary,.sbk-assign-submit{width:100%}
   .sbk-success-card.is-work{padding:26px 16px}
-  body.sbk-supervisor-on{padding-bottom:calc(136px + env(safe-area-inset-bottom,0px)) !important}
+  body.sbk-supervisor-on{padding-bottom:calc(var(--sbk-supervisor-space,136px) + env(safe-area-inset-bottom,0px)) !important}
   .sbk-supervisor{bottom:max(10px,env(safe-area-inset-bottom,0px));border-radius:14px;padding:9px 10px;gap:8px}
   .sbk-supervisor-actions{width:100%;justify-content:flex-end}
   .sbk-supervisor-text span{max-width:60vw}
 }
+
+/* Match the app theme and keep filled actions dark enough for white labels. */
+.dark .sbk-page,.dark .sbk-modal-backdrop{--sbk-accent:#9baaff;--sbk-action:#3559f6}
+.dark .sbk-supervisor-back{color:#9baaff;border-color:rgba(155,170,255,.45)}
+.dark .sbk-assign-error,.dark .sbk-supervisor-error{color:#fca5a5!important}
+.dark .sbk-step.done .sbk-step-num{background:rgba(22,163,74,.15);color:#86efac}
+.sbk-modal-backdrop,.sbk-modal-backdrop *{box-sizing:border-box}
+.sbk-modal{max-height:calc(100dvh - 40px);overflow:auto;overscroll-behavior:contain}
+.sbk-page :is(input,textarea,select,a):focus-visible,.sbk-supervisor button:focus-visible{outline:2px solid var(--sbk-accent,#9baaff);outline-offset:3px}
+.sbk-assign-card h1,.sbk-assign-instructions p,.sbk-assign-notice p,.sbk-crumbs,.sbk-hero h1,.sbk-submit-text{overflow-wrap:anywhere}
+.sbk-assign-tag{min-width:0;max-width:100%;box-sizing:border-box;overflow-wrap:anywhere}
+@media(max-width:1023px), (pointer:coarse){
+  .sbk-page :is(button,.sbk-btn,.sbk-primary,.sbk-poem,.sbk-chip,.sbk-tab,.sbk-step-btn,.sbk-crumb-link),
+  .sbk-modal :is(button,.sbk-btn,.sbk-primary){min-height:44px;min-width:44px}
+  .sbk-page :is(input:not([type=checkbox]):not([type=radio]),textarea,select){min-height:44px;font-size:16px}
+}
+
 @media print{
   @page{margin:12mm}
   body *{visibility:hidden!important}

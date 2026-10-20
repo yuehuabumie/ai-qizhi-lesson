@@ -1,5 +1,17 @@
 # 交接文档（给 GPT）：班级作业 / 主导航 / 横屏与响应式审查
 
+## 2026-10-20 本轮接续说明（已部署并完成生产复核）
+
+本轮范围已扩展为用户要求的全站前端设计、手机适配和本交接未完成项。详细范围、复跑命令与最终证据见 [UI-ACCEPTANCE-2026-10-20.md](./docs/UI-ACCEPTANCE-2026-10-20.md)；当前快照结构和运行方式见更新后的 [README.md](./README.md)。
+
+静态更新已于 **2026-10-20 18:27:23（Asia/Shanghai）** 部署。最终结果：API **45/45**；扩展 UI（预览）**43/43**（含真实插画生成 → 审查 → 提交 → 教师展厅发布/撤下）；生产全站五视口、浅色/深色 **544/544**（506 个布局/主题测量结果 + 38 个交互断言）；生产 320px / 375px 窄屏 **56/56**；动态细节（预览）**99/99**；Node **4/4**、TypeScript 检查通过。全站覆盖 27 个主路由，包含全部 13 个训练入口，另含登录/注册和班级/作业动态状态；**544 是检查结果数，不是不同页面数**。此前 535/535 是新增 9 个触控断言前的预览结果，不作为生产通过数。12 个互动练习只完成 `markLab` 回调标识的静态一致性检查，不能写成全部人工通关。
+
+百人名单、长姓名/标题、六视口作品详情/弹窗、断网和提交失败重试、弹窗竞态与学生确认焦点管理已纳入 99/99 预览细节验收。生产三模块为 `class-studio.js?v=zocjnIv2`、`storybook-studio.js?v=g4FAWhz7`、`responsive-shell.js?v=5EGv9JH6`，源文件与线上副本已核实一致；SHA-256 见 [module-hashes.json](./docs/ui-20261020/module-hashes.json)。永久证据归档位置为 `/home/ubuntu/aiq-api/validation/ui-20261020/evidence.zip` 与 `summary.json`，仓库摘要为 [docs/ui-20261020/summary.json](./docs/ui-20261020/summary.json)。iOS Safari / Android 真机、真实软键盘、安全区和地址栏变化仍未实机验证，其他未验收范围见验收记录。
+
+下文保留接续前的历史清单与原因说明；未勾选项和“未验证”等表述描述交接时状态，不能据此覆盖本轮已取得结果。旧脚本退出码、主题检查等问题是否已修，以当前代码及验收记录为准。纯静态模块变更无需重启 API。
+
+---
+
 - 日期：2026-10-20
 - 仓库：`/home/ubuntu/aiq-api`（不是 git 仓库，改动直接落在文件上）
 - 线上站点：`/var/www/yuehua.online` → 软链到 `/home/ubuntu/aiq-api/site`
@@ -33,7 +45,8 @@
   - 命令：
     ```bash
     cd /home/ubuntu/aiq-api
-    E2E_BASE=https://127.0.0.1 E2E_BROWSER_FLAGS=--ignore-certificate-errors \
+    E2E_BASE=https://yuehua.online \
+    E2E_BROWSER_FLAGS_JSON='["--host-resolver-rules=MAP yuehua.online 127.0.0.1"]' \
       node scripts/assign-ui-e2e.mjs
     ```
 
@@ -51,7 +64,8 @@
   - 修复后只做了 **390 单页探针**（`scripts/overflow-probe.mjs`，结果 `docW=390`、无越界元素）；1366/1024/844/768 尚未在最终构建上复跑。
   - 命令（必须先等限流冷却，见 §6）：
     ```bash
-    E2E_BROWSER_FLAGS_JSON='["--ignore-certificate-errors","--host-resolver-rules=MAP yuehua.online 127.0.0.1"]' \
+    AUDIT_WHOLE_SITE=1 E2E_BASE=https://yuehua.online \
+    E2E_BROWSER_FLAGS_JSON='["--host-resolver-rules=MAP yuehua.online 127.0.0.1"]' \
       node scripts/responsive-audit.mjs > /tmp/responsive-audit4.log 2>&1
     ```
 
@@ -234,13 +248,25 @@
 
 前端模块是独立脚本，安装后立即生效（静态文件，不需要 reload nginx，也不需要重启后端）：
 
+仅修改某个运行时模块时，备份后执行它对应的安装脚本即可。若从原完整 Vue 源码
+重新构建了前端，需在新产物就位、用户上传目录保留后按以下完整顺序恢复补丁与模块：
+
 ```bash
 cd /home/ubuntu/aiq-api
-sudo node scripts/install-class-studio.mjs
+sudo node scripts/patch-prompt-builder.mjs
+sudo node scripts/patch-storybook.mjs
+sudo node scripts/patch-lazy-images.mjs
 sudo node scripts/install-storybook-studio.mjs
-# 前端重新构建后还要按 install-class-studio.mjs 头部注释的顺序重跑其他 patch 脚本
-grep -o 'class-studio.js?v=[A-Za-z0-9_-]*\|storybook-studio.js?v=[A-Za-z0-9_-]*' site/index.html
+sudo node scripts/install-gallery-studio.mjs
+sudo node scripts/install-me-studio.mjs
+sudo node scripts/install-class-studio.mjs
+sudo node scripts/install-responsive-shell.mjs
+grep -o 'class-studio.js?v=[A-Za-z0-9_-]*\|storybook-studio.js?v=[A-Za-z0-9_-]*\|responsive-shell.js?v=[A-Za-z0-9_-]*' site/index.html
 ```
+
+浏览器验收必须保留站点主机名 `https://yuehua.online`，本机访问用上文的 Chromium
+host resolver 参数映射到 `127.0.0.1`；直接以 IP 作为 HTTPS URL 可能命中其他站点。
+普通个人作品署名仍取账号昵称；教师发布本人班级的学生提交时可选择展厅署名，是明确的例外。
 
 本次没有修改：
 - `src/`（后端）→ 不需要 `npm run typecheck` 以外的动作，也不需要重启服务

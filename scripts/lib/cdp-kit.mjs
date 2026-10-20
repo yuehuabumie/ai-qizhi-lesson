@@ -159,13 +159,16 @@ export async function launch({ width = 1366, height = 900 } = {}) {
     })
   }
 
-  async function setViewport(w, h) {
+  async function setViewport(w, h, { mobile = w < 700 } = {}) {
     await page.send('Emulation.setDeviceMetricsOverride', {
       width: w,
       height: h,
       deviceScaleFactor: 1,
-      mobile: w < 700,
+      mobile,
+      screenWidth: w,
+      screenHeight: h,
     })
+    await page.send('Emulation.setTouchEmulationEnabled', { enabled: mobile })
   }
 
   async function screenshot(path) {

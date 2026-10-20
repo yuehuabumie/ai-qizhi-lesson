@@ -1,231 +1,170 @@
 # AI 启智课
 
-小学人工智能通识课教学平台。面向 1–6 年级，4 个模块 × 3 个学段，13 个课堂可演示的互动训练。
+小学人工智能通识课教学平台，面向 1–6 年级。线上站点：[yuehua.online](https://yuehua.online)。
 
-线上：<https://yuehua.online>
+**本仓库是服务器项目快照：Fastify 后端源码、已构建的 Vue 网站，以及独立运行时前端模块。仓库不含完整 Vue/Vite 开发源码。** 根目录 `src/` 是后端，`npm run dev` 启动 API；这里没有 `npm run build` 或 Vite 开发服务器。
 
----
+运维背景与边界见 [HANDOFF.md](./HANDOFF.md)，上一轮未完成清单见 [HANDOFF-GPT-2026-10-20.md](./HANDOFF-GPT-2026-10-20.md)，本轮界面验收记录见 [UI-ACCEPTANCE-2026-10-20.md](./docs/UI-ACCEPTANCE-2026-10-20.md)。历史交接中的通过数只证明对应时间的构建，不能代替当前版本验收。
 
-## 这是什么
+2026-10-20 本轮手机适配已于 **18:27:23（Asia/Shanghai）** 部署，生产全站五视口双主题 **544/544**、320/375px 窄屏 **56/56** 通过。预览中的扩展作业 UI 为 43/43、动态细节为 99/99；范围、证据与真机等剩余限制见本轮验收记录和 [结果摘要](./docs/ui-20261020/summary.json)。
 
-一个 Vue 3 单页站 + Fastify 后端。前端是纯静态产物，后端提供账号、进度同步和作品展厅。
+## 产品行为
 
-**核心产品逻辑**（改动时容易踩，先读这段）：
+- 首页、课程体系、资源列表、视频列表、作品展厅允许匿名浏览；互动训练、教学工具、视频播放、资源下载、个人作品保存和点赞需要账号登录。
+- 未登录不记录普通学习进度，包括内存和 `localStorage`。登录后的进度归账号，可跨设备同步；主题、学段等设备偏好保存在本机。
+- 训练作品先保存为个人草稿，显式发布后才在公共展厅展示。普通个人作品署名取账号昵称。
+- 教师可创建班级、管理最多 100 人的名单，发布 **AI 绘本、互动练习、课程任务**三类作业；课程任务可配套工具训练台。
+- 学生从老师提供的作业链接进入，按名单核对姓名，无需注册普通账号。作业会话与普通账号会话分开；互动练习工作台的底部操作条记录本次作业成绩并提供提交入口。
+- 教师可查看学生提交，并显式发布或撤下展厅作品。**教师发布班级提交时可选择署名**，这是普通个人作品署名规则的例外。
+- 共有 13 个训练入口；其中绘本由独立 `storybook` 作业类型承载，其余 12 个可作为互动练习作业，清单见 `src/lib/assign-catalog.ts`。
 
-- **浏览开放，写入要登录。** 首页、课程体系、资源列表、视频列表、作品展厅都能匿名看；
-  互动训练、课堂教学工具、视频播放、资源下载、作品上传与点赞需要登录。
-- **未登录完全不记录进度**——不写内存也不写 `localStorage`。这是刻意的：
-  记在一个刷新就没的地方，比不记更糟，用户会以为存下来了。
-- **进度归账号，不归设备。** 换设备、换浏览器登录同一个账号，进度都在。
-  只有主题/学段/点名名单留在本机（那是「这台设备」的偏好，不是学习数据）。
-- **作品署名一律取账号昵称。** 客户端传 `author` 会被服务端丢弃——展厅是公开的，
-  允许自填作者名等于给冒名留门。
+主要 hash 路由包括：`#/curriculum`、`#/curriculum/m1` 至 `m4`、`#/lab`、`#/lab/:id`、`#/teach`、`#/resources`、`#/videos`、`#/gallery`、`#/gallery/:id`、`#/me`、`#/me/works`、`#/me/classes`、`#/me/classes/:id`、`#/me/classes/:id/assignments/:assignmentId` 和学生入口 `#/assign/:token`。
 
----
+## 仓库结构与运行环境
 
-## 技术栈
-
-| 层 | 用了什么 |
-|---|---|
-| 前端 | Vue 3.5 + Vite 6 + Pinia + Vue Router（**hash 路由**）+ Element Plus + Tailwind |
-| 后端 | Node 22 + Fastify 5 + Prisma 6 + Zod + jose(JWT) + nodemailer + ioredis |
-| 存储 | MySQL 8（`aiq_course`）+ Redis db1（只用于限流，键前缀 `aiq:`） |
-| 部署 | nginx 反代 `/api/` → `127.0.0.1:3020`，前端静态托管 |
-
-Tailwind 关掉了 `preflight`（`corePlugins.preflight: false`）——Element Plus 自带样式重置，
-两个一起上会把按钮和输入框打回原形。
-
-Element Plus 的图标是**全局注册**的（`main.ts` 里遍历注册），所以模板里可以直接写
-`<Clock />`，不用 import。
-
----
-
-## 目录结构
-
-下面是**开发机仓库**的全貌。服务器上 `/home/ubuntu/aiq-api/` 只有
-后端（`src/`、`prisma/`、`package.json`）、前端构建产物（`site/`）、
-`scripts/` 和这两份文档——**前端源码不在服务器上**，服务器上的 `src/`
-是后端代码，不要按下面的树去找前端的 `api/`、`views/`。
-
-```
-.
-├── src/                    前端源码
-│   ├── api/                按域拆的接口封装（auth / progress / works）
-│   ├── stores/             user（登录态）、app（进度、作品、本机偏好）
-│   ├── composables/        useRequireLogin（操作级门禁）
-│   ├── utils/              request（fetch 封装 + ApiError）、progressSync（同步队列）
-│   ├── views/              页面
-│   └── router/             路由 + 守卫
-├── aiq-api/                后端（独立的一包，Vite 不碰它）
-│   ├── src/routes/         health / auth / progress / works / ai
-│   ├── src/lib/            db / redis / auth / rate-limit / mailer / verify-code
-│   ├── prisma/schema.prisma
-│   └── scripts/            backup-db.sh（备份）+ smoke-*.mjs / *-e2e.mjs（验收）+ *-studio.js（运行时页面）
-├── site/                   构建产物（npm run build 生成）
-└── HANDOFF.md              服务器运维交接文档
+```text
+src/                 Fastify 后端：routes/ 与 lib/
+prisma/              数据库模型
+scripts/             API/UI 验收、运行时前端模块、安装与产物补丁
+scripts/lib/         验收工具、Chromium CDP 驱动、响应式测量
+site/                已构建的 Vue 网站；assets/ 包含入口与视图 chunk
+site/uploads/        运行时用户上传内容（被 Git 忽略，部署必须保留）
+docs/                本轮界面验收记录
+package.json         后端依赖与命令
+.env.example         环境变量模板；真实 .env 不入库
 ```
 
----
+后端使用 Node.js 22、Fastify 5、TypeScript、Prisma 6、MySQL 8 和 Redis。前端产物使用 Vue 3、Pinia、Vue Router hash 路由、Element Plus 和 Tailwind。Tailwind 未启用 preflight；运行时模块必须自行处理作用域内的 `box-sizing`。
 
-## 本地开发
+生产 API 位于 `127.0.0.1:3020`，由 `aiq-api.service` 管理；nginx 将 `/api/` 反代到它。静态目录 `/home/ubuntu/aiq-api/site` 由 `/var/www/yuehua.online` 软链引用。服务器项目目录本身不一定是 Git checkout，更新前应先比较现有文件，保留其他人的改动。
+
+## 后端开发
+
+在仓库根目录执行：
 
 ```bash
-npm install
-npm run dev          # http://localhost:5173
+npm ci
+cp .env.example .env
+# 填写本机开发环境配置；不要把生产密钥写入脚本或提交
+npm run db:generate
+npm run typecheck
+npm run dev
 ```
 
-开发时 `/api` 由 Vite 代理到 `https://yuehua.online`（见 `vite.config.ts`）。
-**这样浏览器视角始终同源**，cookie 行为和生产完全一致——如果改成跨域直连后端，
-`SameSite=Strict` 的 cookie 在开发环境根本不会被带上，会白排查半天。
+`npm run dev` 运行 `tsx watch src/index.ts`，默认监听 `127.0.0.1:3020`；`npm run typecheck` 是 `tsc --noEmit`，只检查后端 TypeScript。`npm start` 运行 API，生产环境由已有 systemd 服务启动。需要本机 MySQL、Redis、邮件等实际配置才能完整运行；生产安全 Cookie 的登录验收应通过同源 HTTPS 页面执行。
+
+数据库结构由 `prisma/schema.prisma` 描述。已有真实数据时，**不要把 `npm run db:push` 当成日常启动步骤**；任何结构变更都先备份并审查迁移影响。
+
+接口前缀为 `/api`，统一错误体为 `{"error":{"code":"...","message":"中文提示"}}`。主要域：
+
+- `/health`：API、数据库与 Redis 健康状态。
+- `/auth/*`：验证码、注册、登录、会话、资料与头像等。
+- `/progress/*`：账号训练进度，合并时只升不降。
+- `/works`、`/works/mine`、作品发布/撤下与点赞：公开作品和个人草稿。
+- `/ai/image`、`/ai/storybook`：真实图片生成。
+- `/classes/*`：教师班级、名单、作业、学生提交与展厅发布。
+- `/assign/:token/*`：学生作业核名、会话、提交。
+
+## 前端修改与安装
+
+完整 Vue 源码需要从原开发机另行找回。本快照可维护的前端源码主要是 `scripts/*-studio.js` 和 `scripts/responsive-shell.js`：
+
+- `storybook-studio.js`：绘本编排、真实生成、审查、作业入口和学生工作台。
+- `class-studio.js`：班级/作业教师页面、弹窗、桌面与移动主导航入口。
+- `gallery-studio.js`：展厅列表、详情和个人作品挑选发布。
+- `me-studio.js`：个人资料、头像、密码和个人作品。
+- `responsive-shell.js`：共享导航、表单、课程页与训练页等移动布局补充。
+
+安装脚本会把模块复制到 `site/assets/`，并更新 `site/index.html` 的内容哈希参数，避免旧缓存。**编辑 `scripts/` 后必须运行对应安装脚本，线上才会使用新内容。** 仅改静态模块不需要重启 API 或 reload nginx。
+
+例如在服务器 `/home/ubuntu/aiq-api` 更新本轮涉及的模块：
 
 ```bash
-npm run typecheck    # vue-tsc --noEmit，提交前必须 0 错误
-npm run build        # 先 typecheck 再 vite build → site/
+sudo node scripts/install-class-studio.mjs
+sudo node scripts/install-storybook-studio.mjs
+sudo node scripts/install-responsive-shell.mjs
 ```
 
-> `emptyOutDir` 是 `false`，所以 `site/` 会积累上一版的哈希文件。
-> 要干净产物就先 `rm -rf site` 再 build。
-
----
-
-## 后端
-
-代码在 `aiq-api/`，**和前端是两套依赖**，`npm install` 要在 `aiq-api/` 里单独跑。
+如果将来取得完整 Vue 源码并生成了新的 `site/`，需在新产物就位后按顺序恢复全部补丁与运行时模块：
 
 ```bash
-cd aiq-api
-cp .env.example .env     # 然后填 DATABASE_URL / REDIS_URL / AUTH_SECRET / SMTP_*
-npm install
-npx prisma generate
-npx prisma db push       # ⚠️ 见下
-npx tsx src/index.ts     # 开发模式启动
+sudo node scripts/patch-prompt-builder.mjs
+sudo node scripts/patch-storybook.mjs
+sudo node scripts/patch-lazy-images.mjs
+sudo node scripts/install-storybook-studio.mjs
+sudo node scripts/install-gallery-studio.mjs
+sudo node scripts/install-me-studio.mjs
+sudo node scripts/install-class-studio.mjs
+sudo node scripts/install-responsive-shell.mjs
 ```
 
-> ⚠️ **`db push` 在需要删列时会静默丢数据。** 项目初期没有真实数据时用它是图快；
-> **现在库里已经有真实用户的学习进度和作品了，再改 schema 必须先把备份跑一遍，
-> 并认真考虑改用 `prisma migrate`。** 学生的进度丢了就是事故。
+`me`、`class` 等模块需要早于入口 bundle 加载以恢复深链接，安装脚本会安排位置。补丁依赖当前产物结构；锚点不匹配时应停止并检查，不能强行替换。不要单独重命名入口 chunk；它被其他视图共同引用，可能加载两份 Vue。
 
-环境变量见 `aiq-api/.env.example`，每个都有注释。缺一个就崩，不带病运行。
-
-### 接口
-
-前缀 `/api`。错误体统一 `{"error":{"code":"...","message":"中文提示"}}`，
-前端直接 `ElMessage.error(e.message)`。
-
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| GET | `/health` | `{ok,db,redis}`，不鉴权 |
-| POST | `/auth/send-code` | 发六位验证码 |
-| POST | `/auth/verify-code` | 校验 → 换 `proof` |
-| POST | `/auth/register` | 凭 `proof` 建号 + 自动登录 |
-| POST | `/auth/login` · `/auth/logout` | 会话 |
-| GET | `/auth/me` | 当前用户；未登录返回 200 + `{user:null}`（刻意不刷 401，见 `routes/auth.ts` 注释） |
-| GET | `/progress` | 拉全量进度（按 labId 的 map） |
-| PUT | `/progress/labs/:labId` | 单条训练进度，合并语义（只升不降） |
-| PUT | `/progress/quiz` | 知识挑战赛最好成绩（取 max） |
-| DELETE | `/progress` | 清空进度（用户显式重置） |
-| POST | `/progress/import` | 旧 `localStorage` 一次性导入（合并，非覆盖） |
-| GET · POST | `/works` | 展厅列表（开放）/ 建作品（登录） |
-| DELETE | `/works/:id` | 仅本人，否则 403 |
-| POST · DELETE | `/works/:id/like` | 点赞 / 取消，幂等（重复点赞不报错也不重复计数） |
-| POST | `/ai/image` | 提示词工坊真实出图（登录；账号 10 次/小时、IP 80 次/小时；z-image 约 8–10 秒、qwen-image 约 40–60 秒，一次最多 4 张） |
-| POST | `/ai/storybook` | 故事绘本逐页插画（登录；账号 10 次/小时、IP 80 次/小时；一次最多 4 页，`images` 按页序对位、失败页为 `null`） |
-
-### 注册为什么要三段式
-
-`send-code` 存 `sha256(email + code)`；`verify-code` 命中后生成一个一次性 `proof`
-（32 随机字节）并把它的哈希写回同一行；`register` 凭 `proof` 定位并消费。
-
-`proof` 的作用是把「邮箱已验证」这个事实**安全地绑定到最终那次注册请求上**——
-防重放、防拿别人的验证码注册。
-
-进度合并用单条原子 SQL（`ON DUPLICATE KEY UPDATE` + `GREATEST`），
-不是先读后写——并发下先读后写会丢高分（两个请求都读到 0，写 90 和 80，最终 80）。
-
----
+修改运行时模块可先使用 `scripts/preview-site.mjs`：它只监听本机 `127.0.0.1:3320`，从 `PREVIEW_SITE` 指定目录读取静态文件，以当前 `scripts/` 覆盖运行时模块，并将 `/api` 代理到本机 API。提供 `PREVIEW_TLS_KEY` 和 `PREVIEW_TLS_CERT` 时启用 HTTPS，以验证 Secure Cookie。预览文件服务不改生产静态目录，但 API 仍指向配置的后端；验收必须使用专用测试数据。
 
 ## 验收
 
-验收脚本在 `aiq-api/scripts/`，分两层：API 冒烟（curl，服务器上就能跑）和
-真实浏览器端到端（CDP 驱动 Edge，需要开发机）。
+本地无需服务的结构与审计工具检查：
 
-**冒烟（服务器上直接跑，默认打 `http://127.0.0.1:3020`）：**
+```bash
+node --test scripts/responsive-metrics.test.mjs scripts/lab-callbacks.test.mjs
+npm run typecheck
+```
+
+`lab-callbacks.test.mjs` 检查编译产物中 12 个互动练习的 `markLab` 标识是否与作业目录一致；**它不等于逐个完成全部训练的浏览器验收**。
+
+完整 API/UI 验收设计为在服务器上运行，需要已配置 API、MySQL、Redis 和无头 Chromium。验证码测试会真实发邮件，并通过本机 `sudo mysql` 读取测试验证码哈希；不能在普通开发机上直接运行这些脚本来远程访问生产库。
 
 ```bash
 cd /home/ubuntu/aiq-api
-node scripts/smoke-auth.mjs       # 注册/登录/会话/限流/防枚举，33 项
-node scripts/smoke-progress.mjs   # 进度合并/并发取高分/导入/清空，37 项
+node scripts/assign-e2e.mjs
 ```
 
-- `SMOKE_BASE` 指向别的地址（如线上），默认本地 3020
-- `SMOKE_EMAIL` 换测试邮箱（默认 `301@301.group`）
-- `SMOKE_KEEP=1` 保留测试账号（默认跑完即删）
-
-**真实浏览器验收（开发机，Windows + Edge + ssh.exe）：**
+浏览器页面应使用正确主机名 `https://yuehua.online`。服务器本机验证可通过 Chromium 参数把域名解析至本机，保留 nginx 虚拟主机选择和同源 Cookie：
 
 ```bash
-SSH_PASS=... node scripts/cdp-e2e-auth.mjs   # 注册 → 刷新仍登录 → 退出 → 再登录
+E2E_BASE=https://yuehua.online \
+E2E_BROWSER_FLAGS_JSON='["--host-resolver-rules=MAP yuehua.online 127.0.0.1"]' \
+  node scripts/assign-ui-e2e.mjs
 ```
 
-- `E2E_BASE=http://localhost:5173` 打本地 dev，不设则打线上
-- `E2E_FLUSH=1` 先清限流键（反复跑会被自己的限流挡住）
-- `KEEP=1` 保留测试账号（默认跑完会删）
+**不要改成 `https://127.0.0.1`**：它可能命中服务器上其他站点的默认虚拟主机。浏览器驱动可通过 `E2E_BROWSER` 指定 Chromium；包含空格的参数使用 `E2E_BROWSER_FLAGS_JSON`，不要使用按空格拆分的旧变量传 host resolver 参数。
 
-故事绘本页不是 `LabPlayView` 里的组件了：`scripts/storybook-studio.js` 在运行时
-用更高优先级的静态路由接管 `/lab/storybook`，实现「编排 → 生成 → 审查 → 提交展厅」
-三段式与成书拼接预览。重新构建前端后需
-`sudo node scripts/install-storybook-studio.mjs` 重新挂载（详见 HANDOFF §5）。
-
-**服务器上也能跑的真实浏览器验收**（用本机缓存的 Chromium，直连 CDP）：
+全站响应式审计：
 
 ```bash
-node scripts/gallery-e2e.mjs   # 成果展厅 83 项（含个人草稿挑选发布/撤下）
-node scripts/me-e2e.mjs        # 我的页面 63 项（下拉入口/资料/头像裁剪/改密码/个人作品）
+AUDIT_WHOLE_SITE=1 AUDIT_OUTPUT=/tmp/aiq-responsive-final \
+E2E_BASE=https://yuehua.online \
+E2E_BROWSER_FLAGS_JSON='["--host-resolver-rules=MAP yuehua.online 127.0.0.1"]' \
+  node scripts/responsive-audit.mjs
 ```
 
-**跑之前确认测试邮箱没被真人占用。** 脚本跑完会删账号，撞上真人的号会把人家的
-进度清空——脚本里为此加了护栏：**账号已存在但昵称不是本脚本的测试昵称时，
-拒绝清理并直接退出**（确认真能删，再设 `SMOKE_FORCE=1` 重跑）。
+输出目录保存 `report.json` 与页面截图；失败返回非零退出码。审计以请求的视口宽度比较溢出，并检查移动端自动缩小、弹窗边界、学生操作条占位等；小触控目标列表仍需结合实际可点击包装元素人工判断。明暗主题使用真实的 `html.dark` 切换。
 
-「我的」页与个人作品页同样是运行时模块：`scripts/me-studio.js` 接管 `/me` 与
-`/me/works`，`scripts/gallery-studio.js` 接管 `/gallery`。训练页保存的作品先进入
-个人作品库（草稿），在个人作品页或成果展厅显式发布后才公开；展厅的「发布我的作品」
-就是从个人草稿里多选发布。重新构建前端后需依次挂载：
+`scripts/public-mobile-audit.mjs` 无需账号，检查 320/375px 的 14 个公开页面、双主题。`scripts/mobile-detail-audit.mjs` 使用独立测试账号，补查百人名单、长姓名/标题、作品详情、个人作品/展厅弹窗、断网重试、带照片的提交失败恢复和预览请求竞态。它们同样接受 `E2E_BASE`、`AUDIT_OUTPUT` 与浏览器参数；细节套件也必须与其他账号套件串行运行。
 
-```bash
-sudo node scripts/install-storybook-studio.mjs
-sudo node scripts/install-gallery-studio.mjs
-sudo node scripts/install-me-studio.mjs   # 必须排在入口 bundle 之前（脚本会自动挪）
-```
+其他已有套件为 `smoke-auth.mjs`、`smoke-progress.mjs`、`gallery-e2e.mjs`、`me-e2e.mjs`。旧 `cdp-e2e-auth.mjs` 依赖原开发机的 Windows/Edge/SSH 设置，仅作历史参考；优先使用当前服务器 Chromium 套件。最终通过数以本轮验收记录为准。
 
-头像由浏览器裁剪成 512×512 JPEG 后上传，服务端校验格式与魔数并做 AI 安全检查，
-文件保存在 `site/uploads/avatars/`（部署时和 `site/uploads/works/` 一起保留，
-见 HANDOFF §5）。
+测试账号与限流要求：
 
----
+- 脚本默认测试邮箱为 `301@301.group`。班级套件和响应式审计可通过 `ASSIGN_E2E_EMAIL` 指定专用邮箱；其他套件按各自环境变量约定使用。
+- 删除测试账号前校验预期昵称。昵称不匹配时应停止、确认归属；**不要设置 `SMOKE_FORCE=1` 绕过护栏**。同一测试邮箱的套件必须串行运行，不能互相清理账号。
+- 学生核名 `/assign/:token/verify` 有每 IP 30 次/10 分钟、每 token 300 次/小时限制。连续套件需要等待冷却；HTTP 429 不能当成页面故障或继续等待成功页面。
+- 如确需清理测试限流，只能检查并删除 **Redis db1 中与本次测试精确对应的 `aiq:` 键**；禁止清空数据库或整个项目前缀。
 
-## 部署
+## 部署边界
 
-**服务器侧的完整交接见 [`HANDOFF.md`](./HANDOFF.md)**，那里有红线、现状速查和运维步骤。
-一句话版本：
-
-- 前端：本地 `npm run build` → `tar` → `scp` → 服务器上原子换目录
-- 后端：`systemctl restart aiq-api`
-- nginx：改前备份，改后先 `nginx -t` 再 `reload`
-
----
+- 本项目数据库仅为 **`aiq_course`**。不得操作 `301_group`、其他项目库或旧站内容；SQL 和备份命令必须显式指定库名。
+- Redis 限流使用 **db1、`aiq:` 前缀**。禁止 `FLUSHDB`、`FLUSHALL`。
+- `.env`、SSH 凭据、邮件/AI/API 密钥不得提交或出现在输出与浏览器资源中。
+- `site/uploads/` 是用户上传内容，**不是构建产物**。作品插画、头像及其他上传文件都要保留；不能删除 `site/` 来获得“干净构建”。
+- 本轮只更新具体模块、安装脚本和静态入口时，应先备份这些原文件，再安装并验证内容哈希。不要整目录覆盖上传内容。回滚时恢复同一批文件和匹配的 `index.html`。
+- 更换完整静态产物时，按 [HANDOFF.md §5](./HANDOFF.md#5-怎么改动各层) 保存并恢复上传目录；不要删除 `/var/www/yuehua.online` 软链。
+- 纯前端变更不需要重启 `aiq-api.service`。后端或 nginx 变更属于单独的部署步骤；改 nginx 前备份，检查 `nginx -t` 通过后再 reload。
+- 按项目要求，不进行图片压缩或 WebP 转换。
 
 ## 已知限制
 
-- **忘记密码没有自助找回**，本期不含重置流程
-- 跨标签页登录态不会自动刷新（`ensureLoaded()` 只探活一次），刷新即正常
-- `send-code` 对已注册邮箱返回 409，会暴露邮箱是否注册过（学校场景 UX 优先，风险接受）
-- 数据库 schema 仍在 `db push` 阶段，没有迁移历史
+完整 Vue 源码尚未包含在此快照，运行时路由和导航注入依赖既有构建结构，前端重新构建后需重新验证。忘记密码没有自助找回；跨标签页登录态需刷新同步；`send-code` 对已注册邮箱返回 409；数据库尚无正式迁移历史。这些既有产品/技术决定见交接文档。
 
----
-
-## 历史
-
-本站域名原本是「高校数学」的 relay 站，后端早已停止监听。
-2026-10-15 重建为静态站，同日起逐步加上后端、账号体系、内容门禁和作品服务端化。
-历史内容（`/var/www/gaoshu` 等）都还在服务器上，未清理。
+移动端自动化使用 Chromium CDP 模拟。iOS Safari、真实软键盘、安全区和浏览器地址栏变化仍需要真机复核，不能由模拟器结果替代。

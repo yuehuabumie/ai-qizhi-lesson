@@ -1,0 +1,10 @@
+{
+  "baseCommit": "5ea0d92",
+  "hashAlgorithm": "SHA-256",
+  "files": {
+    "site/index.html": "41570e8c7b78fd2fe02dd95115c40c9a453a810b9d1956f368294cd21a09b1df",
+    "scripts/class-studio.js": "ce87239c8bf62e6f9c75196d118b846f3dd7761433a4f236a88558f2169d4749",
+    "scripts/storybook-studio.js": "8381405a1cfb1b39ae50519a47622b99d9c4ea2721067afd509b3de363b38fcb",
+    "scripts/responsive-shell.js": "e441aff491fa9ad9d43c6b54007f378385b9460197bc107e71e51d831455aaf4"
+  }
+}

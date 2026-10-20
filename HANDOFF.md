@@ -1,5 +1,25 @@
 # AI 启智课 · 服务器侧交接文档
 
+## 2026-10-20 接续说明（本轮已部署并复核）
+
+本轮按用户要求检查前端设计与全站手机适配。当前仓库是 Fastify 后端源码、静态前端产物及运行时模块的快照，不含完整 Vue/Vite 源码；结构与实际命令见更新后的 [README.md](./README.md)。验收范围、可复跑命令和最终证据记录在 [UI-ACCEPTANCE-2026-10-20.md](./docs/UI-ACCEPTANCE-2026-10-20.md)。
+
+本轮静态更新已于 **2026-10-20 18:27:23（Asia/Shanghai）** 部署，生产复核完成。结果为：
+
+- 班级作业 API：**45/45**。
+- 扩展班级作业 UI（预览）：**43/43**，包含真实插画生成 → 审查 → 提交 → 教师发布到展厅 → 撤下。
+- 生产全站五视口、浅色/深色审计：**544/544**，包含 506 个布局/主题测量结果和 38 个交互断言。覆盖 27 个主路由（含全部 13 个训练入口），另含登录/注册、班级/作业的动态页面状态；544 是检查结果数，**不是不同页面数**。此前预览 535/535 保留在验收记录中，不作为生产通过数。
+- 生产 320px / 375px 窄屏抽查：**56/56**。
+- 动态细节套件（预览）：**99/99**，覆盖百人名单、长姓名/标题、六视口作品详情/弹窗、断网及提交失败后的重试、弹窗竞态与学生确认焦点管理。
+- Node 检查 **4/4**，后端 TypeScript 检查通过。
+- 12 个互动练习 `markLab` 标识已做静态一致性检查；这不代表 12 个游戏均已人工通关。
+
+生产模块版本为 `class-studio.js?v=zocjnIv2`、`storybook-studio.js?v=g4FAWhz7`、`responsive-shell.js?v=5EGv9JH6`，源文件与线上副本已核实一致；SHA-256 见 [module-hashes.json](./docs/ui-20261020/module-hashes.json)。永久证据归档位置为 `/home/ubuntu/aiq-api/validation/ui-20261020/evidence.zip` 与 `summary.json`，仓库摘要为 [docs/ui-20261020/summary.json](./docs/ui-20261020/summary.json)。iOS Safari / Android 真机、真实软键盘、安全区、12 个游戏逐个完整通关等限制仍保留，详见验收记录。
+
+以下保留早期运维与验收历史，旧通过数、文件数量和“待办”描述仅对应当时状态；与本轮进展冲突时，以本说明及最终验收记录为准。本轮不改数据库、nginx 或后端功能，纯静态模块更新无需重启 API。
+
+---
+
 **写给在 `43.131.233.40` 上干活的 agent。** 你手上只有这台服务器，没有开发机的上下文，
 所以下面把「为什么」也写上了——只知道怎么做、不知道为什么要这么做的人，遇到意外时
 没法判断该不该变通。
@@ -234,9 +254,9 @@ sudo certbot renew --dry-run
    要补的话最小做法是把邮箱验证的三段式复用一遍（`purpose: 'reset'` → proof → 改密 +
    `sessionVersion + 1` 踢掉所有端），大约半天工作量。
 
-3. **作品署名强制为账号昵称。** 客户端传 `author` 会被服务端丢弃（已测）。
-   展厅是公开的，允许自填作者名等于给冒名留门（"学校官方"随便写）。
-   老师想署班级名，改自己昵称。
+3. **普通个人作品署名强制为账号昵称。** 普通建作品接口会丢弃客户端传入的 `author`。
+   **班级提交发布是例外**：教师通过本人班级的提交发布界面可选择展厅署名，后端会校验
+   班级归属与非空署名；无需为了给学生或班级署名修改教师账号昵称。
 
 4. **跨标签页登录态不会自动刷新。** `ensureLoaded()` 只探活一次就置 `loaded = true`，
    在 A 标签页登录后，之前已经打开的 B 标签页不会感知到。刷新即正常。
@@ -255,10 +275,12 @@ sudo certbot renew --dry-run
 
 ### 前端（静态站）
 
-前端**不在服务器上构建**。开发机构建后传产物。要更新：
+前端**不在服务器上构建**。完整 Vue 源码不在当前快照；以下整站替换步骤仅适用于
+从原开发机取得并审查过的新构建。日常运行时模块修改应备份相关文件后执行对应安装
+脚本，不必更换整个 `site/`。完整构建更新方式：
 
 ```bash
-# 开发机：npm run build 产出 site/
+# 原完整前端源码仓库：npm run build 产出 site/（本快照没有该命令）
 # 传到服务器 /tmp/site.tar.gz 后：
 sudo rm -rf /home/ubuntu/aiq-api/site.new && sudo mkdir -p /home/ubuntu/aiq-api/site.new
 sudo tar xzf /tmp/site.tar.gz -C /home/ubuntu/aiq-api/site.new
@@ -317,7 +339,11 @@ sudo mv /home/ubuntu/aiq-api/site.new /home/ubuntu/aiq-api/site
    sudo node scripts/patch-prompt-builder.mjs
    sudo node scripts/patch-storybook.mjs
    sudo node scripts/patch-lazy-images.mjs   # 性能补丁（视图懒加载 + hero 预加载）
-   sudo node scripts/install-storybook-studio.mjs  # 运行时创作台，放最后
+   sudo node scripts/install-storybook-studio.mjs
+   sudo node scripts/install-gallery-studio.mjs
+   sudo node scripts/install-me-studio.mjs
+   sudo node scripts/install-class-studio.mjs
+   sudo node scripts/install-responsive-shell.mjs
    ```
 
 补丁后的交互：等待时进度停在「上色与细化…」（不再循环），AI 返回后补完最后一步再
@@ -349,6 +375,8 @@ DNS 解析拒绝内网、**连接固定在校验过的公网 IP 上**以防 DNS 
 sudo node scripts/install-storybook-studio.mjs
 sudo node scripts/install-gallery-studio.mjs
 sudo node scripts/install-me-studio.mjs   # 必须排在入口 bundle 之前（脚本会自动挪到位）
+sudo node scripts/install-class-studio.mjs
+sudo node scripts/install-responsive-shell.mjs
 ```
 
 「我的」与个人作品是 `scripts/me-studio.js`（由 `install-me-studio.mjs` 安装），
@@ -420,8 +448,9 @@ sudo journalctl -u aiq-api --since '1 hour ago'  # 最近一小时
 
 ## 6. 开发机侧（不用你管，列出来是为了让你知道有些东西不在服务器上）
 
-- **前端源码在开发机**。服务器上只有构建产物 `site/`（静态文件），不在服务器上
-  构建、也没有前端源码——`README.md` 里的目录树画的是开发机仓库全貌。
+- **完整 Vue 前端源码在原开发机**。当前快照包含后端源码、`site/` 静态产物及
+  `scripts/*-studio.js` / `responsive-shell.js` 运行时前端模块。更新后的 `README.md`
+  目录树描述当前快照；根目录 `src/` 为后端，不能按完整 Vue 项目运行构建。
 - 一次性的诊断脚本（`probe-tz.mjs` / `probe-server.mjs` / `probe-net.mjs`）已删除。
 - **真实浏览器验收**（`scripts/cdp-e2e-auth.mjs`，注册→刷新→退出→再登录）需要
   Windows + Edge + `ssh.exe`，在开发机上对线上跑，**服务器上跑不了**。
