@@ -1,0 +1,25 @@
+{
+  "deployedAt": "2026-10-20T20:45:08+08:00",
+  "components": {
+    "navigation": 7,
+    "gallery": 19,
+    "me": 16
+  },
+  "reports": {
+    "final-whole": {
+      "checks": 544,
+      "failures": 0,
+      "measurements": 506
+    },
+    "final-narrow": {
+      "checks": 56,
+      "failures": 0,
+      "measurements": 56
+    },
+    "final-details": {
+      "checks": 99,
+      "failures": 0,
+      "measurements": 90
+    }
+  }
+}

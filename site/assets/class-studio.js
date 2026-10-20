@@ -2193,6 +2193,13 @@
   .cls-studio-root *,.cls-modal-backdrop *,.cls-toast{animation:none!important;transition:none!important}
 }
 
+/* Injected links do not inherit Vue's compiled data-v scope attributes. */
+[data-cls-nav-tab]{color:var(--aiq-text-soft);background:transparent;text-decoration:none!important;transition:color .22s ease,background .22s ease}
+[data-cls-nav-tab]:hover{color:var(--aiq-accent);background:var(--aiq-nav-hover)}
+[data-cls-nav-tab].is-active{color:#fff;background:linear-gradient(135deg,#4f7cff,#7c4dff);box-shadow:0 10px 22px -12px #4f7cffe6;font-weight:600}
+html.dark [data-cls-nav-tab].is-active{color:#fff;box-shadow:0 10px 22px -14px #000000e6}
+[data-cls-nav-tab]:focus-visible{outline:2px solid var(--aiq-accent);outline-offset:3px}
+
 /* 顶部主导航多一个标签后，1024–1365 宽度收紧内边距，避免横向溢出 */
 @media (min-width:1024px) and (max-width:1279px){
   .aiq-navbar nav a.nav-item{padding-left:8px;padding-right:8px;font-size:13.5px}

@@ -223,9 +223,11 @@
   let toastTimer = 0
   let modalEl = null
   let modalReturnFocus = null
+  let modalReturnTarget = null
   let modalKeyHandler = null
+  let modalCleanup = null
   const ctx = { router: null, pinia: null }
-  const listeners = { click: null, change: null, input: null, submit: null }
+  const listeners = { click: null, change: null, input: null, submit: null, keydown: null }
 
   function authStore() {
     try {
@@ -478,7 +480,7 @@
   // ── 个人作品页 ─────────────────────────────────────────────
   function tabButton(key, label, count) {
     const active = S.worksFilter === key
-    return `<button type="button" role="tab" class="me-tab" data-act="filter" data-filter="${key}" aria-selected="${active}" tabindex="${active ? 0 : -1}">${esc(label)}<span class="me-tab-num" data-filter-count="${key}">${Number(count) || 0}</span></button>`
+    return `<button type="button" role="tab" id="me-works-tab-${key}" aria-controls="me-works-grid" class="me-tab" data-act="filter" data-filter="${key}" aria-selected="${active}" tabindex="${active ? 0 : -1}">${esc(label)}<span class="me-tab-num" data-filter-count="${key}">${Number(count) || 0}</span></button>`
   }
 
   function worksShell() {
@@ -501,7 +503,7 @@
           <button type="button" class="me-btn me-primary" data-act="new-work">${svgIcon('plus')}新建作品</button>
         </div>
       </div>
-      <div class="me-works" id="me-works-grid" aria-busy="true">${skeletonCards(6)}</div>
+      <div class="me-works" id="me-works-grid" role="tabpanel" aria-labelledby="me-works-tab-${S.worksFilter}" tabindex="0" aria-busy="true">${skeletonCards(6)}</div>
       <div data-me-more></div>
     </div>`
   }
@@ -598,6 +600,8 @@
       btn.setAttribute('aria-selected', active ? 'true' : 'false')
       btn.setAttribute('tabindex', active ? '0' : '-1')
     })
+    const panel = root.querySelector('#me-works-grid')
+    if (panel) panel.setAttribute('aria-labelledby', `me-works-tab-${S.worksFilter}`)
     const counts = { all: S.stats.total, published: S.stats.published, draft: S.stats.drafts }
     root.querySelectorAll('[data-filter-count]').forEach((el) => {
       const key = el.getAttribute('data-filter-count')
@@ -611,6 +615,7 @@
 
   async function loadWorks(reset) {
     if (!reset && S.worksLoading) return
+    const returnTarget = reset ? describePageFocus(document.activeElement) : null
     const seq = ++worksSeq
     const page = reset ? 1 : S.worksPage + 1
     if (reset) {
@@ -652,6 +657,7 @@
     } finally {
       if (seq === worksSeq) S.worksLoading = false
       if (seq === worksSeq && S.works.length) renderWorksGrid(false)
+      if (seq === worksSeq && returnTarget && !modalEl && !root?.contains(document.activeElement)) restorePageFocus(returnTarget)
     }
   }
 
@@ -680,6 +686,7 @@
     if (nickname.length > 20) return formError(form, '昵称最多 20 个字')
     if (bad) return formError(form, '昵称包含非法字符')
 
+    const returnTarget = describePageFocus(document.activeElement)
     S.busy.add('profile')
     const btn = form.querySelector('button[type="submit"]')
     if (btn) {
@@ -697,6 +704,7 @@
       if (root && S.mode === 'profile') {
         root.innerHTML = profileShell()
         toast('个人资料已保存')
+        if (returnTarget && !modalEl) restorePageFocus(returnTarget)
       }
     } catch (err) {
       formError(form, err && err.message ? err.message : '保存失败，请稍后再试')
@@ -1014,6 +1022,7 @@
   }
 
   async function uploadAvatarDataUrl(dataUrl) {
+    const returnTarget = describePageFocus(document.activeElement)
     const approxBytes = Math.ceil((dataUrl.length * 3) / 4)
     if (approxBytes > MAX_AVATAR_BYTES) {
       toast('裁剪后的图片仍然太大，请换一张试试', 'error')
@@ -1030,6 +1039,7 @@
       if (root && S.mode === 'profile') {
         root.innerHTML = profileShell()
         toast('头像已更新')
+        if (returnTarget && !modalEl) restorePageFocus(returnTarget)
       }
     } catch (err) {
       toast(err && err.message ? err.message : '头像上传失败，请稍后再试', 'error')
@@ -1078,6 +1088,14 @@
   async function publishWork(id) {
     if (!id || S.busy.has('pub:' + id)) return
     S.busy.add('pub:' + id)
+    const button = root && Array.from(root.querySelectorAll('[data-act="publish"]')).find((el) => el.dataset.id === id)
+    const returnTarget = describePageFocus(button || document.activeElement)
+    if (button) {
+      button.disabled = true
+      button.setAttribute('aria-busy', 'true')
+      button.dataset.label = button.innerHTML
+      button.textContent = '发布中…'
+    }
     try {
       await api(`/api/works/${encodeURIComponent(id)}/publish`, { method: 'POST' })
       toast('已发布到成果展厅')
@@ -1086,6 +1104,12 @@
       toast(err && err.message ? err.message : '发布失败，请稍后再试', 'error')
     } finally {
       S.busy.delete('pub:' + id)
+      if (button && button.isConnected) {
+        button.disabled = false
+        button.removeAttribute('aria-busy')
+        button.innerHTML = button.dataset.label || '发布到展厅'
+      }
+      if (returnTarget && !modalEl && !root?.contains(document.activeElement)) restorePageFocus(returnTarget)
     }
   }
 
@@ -1204,14 +1228,14 @@
     formError(form, '')
     try {
       await api('/api/works', { method: 'POST', body: { title, type, module, grade, desc, hue } })
-      closeModal()
+      if (modalEl === backdrop) closeModal()
       toast('已保存到个人作品')
       if (S.mode === 'works') {
         if (S.worksFilter === 'published') S.worksFilter = 'all'
         await loadWorks(true)
       }
     } catch (err) {
-      formError(form, err && err.message ? err.message : '保存失败，请稍后再试')
+      if (modalEl === backdrop) formError(form, err && err.message ? err.message : '保存失败，请稍后再试')
     } finally {
       S.busy.delete('create')
       if (btn && btn.isConnected) {
@@ -1222,12 +1246,32 @@
   }
 
   // ── 弹层 / Toast ───────────────────────────────────────────
+  function describePageFocus(element) {
+    if (!root || !element || !root.contains(element)) return null
+    return { id: element.id, act: element.getAttribute('data-act'), workId: element.getAttribute('data-id'), filter: element.getAttribute('data-filter'), formId: element.form?.id, type: element.type }
+  }
+
+  function restorePageFocus(target) {
+    if (!root || !target) return
+    const actions = Array.from(root.querySelectorAll('[data-act]'))
+    const sameId = target.id && root.querySelector('#' + CSS.escape(target.id))
+    const sameForm = target.formId && target.type === 'submit' && root.querySelector('#' + CSS.escape(target.formId) + ' button[type="submit"]')
+    const sameAction = target.act && actions.find((el) => el.getAttribute('data-act') === target.act && el.getAttribute('data-id') === target.workId && el.getAttribute('data-filter') === target.filter)
+    const sameWork = target.workId && actions.find((el) => el.getAttribute('data-id') === target.workId)
+    const fallback = S.mode === 'works' ? root.querySelector('[role="tab"][aria-selected="true"]') : root.querySelector('[data-act="avatar-choose"],#me-profile-form button[type="submit"]')
+    const element = sameId || sameForm || sameAction || sameWork || fallback
+    if (element && !element.disabled) element.focus({ preventScroll: true })
+  }
+
   function createModal({ title, subtitle, body, footer, onMount }) {
+    const returnFocus = modalEl ? modalReturnFocus : document.activeElement
+    const returnTarget = modalEl ? modalReturnTarget : describePageFocus(returnFocus)
     closeModal(false)
-    modalReturnFocus = document.activeElement
+    modalReturnFocus = returnFocus
+    modalReturnTarget = returnTarget
     const backdrop = document.createElement('div')
     backdrop.className = 'me-modal-backdrop'
-    backdrop.innerHTML = `<div class="me-modal" role="dialog" aria-modal="true" aria-labelledby="me-modal-title">
+    backdrop.innerHTML = `<div class="me-modal" role="dialog" aria-modal="true" aria-labelledby="me-modal-title" tabindex="-1">
       <div class="me-modal-head">
         <div><h2 id="me-modal-title">${esc(title)}</h2>${subtitle ? `<p>${esc(subtitle)}</p>` : ''}</div>
         <button type="button" class="me-icon-btn" data-modal-cancel aria-label="关闭">${svgIcon('close')}</button>
@@ -1237,6 +1281,14 @@
     </div>`
     document.body.appendChild(backdrop)
     modalEl = backdrop
+    const background = Array.from(document.body.children).filter((el) => el !== backdrop && el !== toastEl && el instanceof HTMLElement).map((el) => [el, el.inert])
+    const overflow = document.body.style.overflow
+    background.forEach(([el]) => { el.inert = true })
+    document.body.style.overflow = 'hidden'
+    modalCleanup = () => {
+      background.forEach(([el, inert]) => { el.inert = inert })
+      document.body.style.overflow = overflow
+    }
     backdrop.addEventListener('click', (e) => {
       const target = e.target instanceof Element ? e.target : null
       if (!target) return
@@ -1245,6 +1297,7 @@
     modalKeyHandler = (e) => {
       if (e.key === 'Escape') {
         e.preventDefault()
+        e.stopPropagation()
         closeModal()
         return
       }
@@ -1258,22 +1311,33 @@
     }
     const focusable =
       backdrop.querySelector('[data-autofocus]') ||
-      backdrop.querySelector('button, input, select, textarea, a[href]')
+      modalFocusables()[0] || backdrop.querySelector('[role="dialog"]')
     if (focusable) focusable.focus()
     return backdrop
   }
 
-  function trapTab(e) {
-    if (!modalEl) return
-    const items = Array.from(
+  function modalFocusables() {
+    return modalEl ? Array.from(
       modalEl.querySelectorAll(
         'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
       ),
-    ).filter((el) => el.offsetParent !== null)
-    if (!items.length) return
+    ).filter((el) => el.getClientRects().length && el.tabIndex >= 0 && !el.disabled) : []
+  }
+
+  function trapTab(e) {
+    if (!modalEl) return
+    const items = modalFocusables()
+    if (!items.length) {
+      e.preventDefault()
+      modalEl.querySelector('[role="dialog"]').focus()
+      return
+    }
     const first = items[0]
     const last = items[items.length - 1]
-    if (e.shiftKey && document.activeElement === first) {
+    if (!items.includes(document.activeElement)) {
+      e.preventDefault()
+      ;(e.shiftKey ? last : first).focus()
+    } else if (e.shiftKey && document.activeElement === first) {
       e.preventDefault()
       last.focus()
     } else if (!e.shiftKey && document.activeElement === last) {
@@ -1288,6 +1352,8 @@
     modalKeyHandler = null
     const el = modalEl
     modalEl = null
+    if (modalCleanup) modalCleanup()
+    modalCleanup = null
     el.remove()
     if (restoreFocus && modalReturnFocus && document.contains(modalReturnFocus)) {
       try {
@@ -1295,8 +1361,11 @@
       } catch {
         /* 元素可能已随重渲染消失 */
       }
+    } else if (restoreFocus) {
+      restorePageFocus(modalReturnTarget)
     }
     modalReturnFocus = null
+    modalReturnTarget = null
   }
 
   function openConfirm({ title, message, confirmText, danger, onConfirm }) {
@@ -1315,8 +1384,9 @@
       btn.textContent = '处理中…'
       try {
         await onConfirm()
-        closeModal()
+        if (modalEl === backdrop) closeModal()
       } catch (err) {
+        if (modalEl !== backdrop) return
         const el = backdrop.querySelector('[data-me-error]')
         if (el) {
           el.textContent = (err && err.message) || '操作失败，请稍后再试'
@@ -1374,6 +1444,19 @@
   }
 
   // ── 事件 ───────────────────────────────────────────────────
+  function onKeyDown(e) {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return
+    const tab = e.target instanceof Element ? e.target.closest('[role="tab"][data-act="filter"]') : null
+    if (!tab || !root || !root.contains(tab)) return
+    const tabs = Array.from(root.querySelectorAll('.me-tabs [role="tab"]'))
+    const index = tabs.indexOf(tab)
+    if (index < 0) return
+    e.preventDefault()
+    const next = e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1 : (index + (e.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length
+    tabs[next].click()
+    tabs[next].focus()
+  }
+
   function onClick(e) {
     const target = e.target instanceof Element ? e.target : null
     if (!target) return
@@ -1498,10 +1581,12 @@
     listeners.change = onChange
     listeners.input = onInput
     listeners.submit = onSubmit
+    listeners.keydown = onKeyDown
     root.addEventListener('click', listeners.click)
     root.addEventListener('change', listeners.change)
     root.addEventListener('input', listeners.input)
     root.addEventListener('submit', listeners.submit)
+    root.addEventListener('keydown', listeners.keydown)
     resetState(mode)
     window.scrollTo(0, 0)
     if (mode === 'works') mountWorks()
@@ -1517,6 +1602,7 @@
       root.removeEventListener('change', listeners.change)
       root.removeEventListener('input', listeners.input)
       root.removeEventListener('submit', listeners.submit)
+      root.removeEventListener('keydown', listeners.keydown)
       root.remove()
       root = null
     }
@@ -1692,7 +1778,7 @@
 .me-form-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
 .me-field{display:flex;flex-direction:column;min-width:0}
 .me-field>label{font-size:12.5px;font-weight:600;color:var(--me-soft-text);margin-bottom:6px}
-.me-input{width:100%;border:1px solid var(--me-border);background:var(--me-card);color:var(--me-text);border-radius:10px;padding:9px 12px;font-size:13.5px;font-family:inherit;outline:none;transition:border-color .2s ease,box-shadow .2s ease}
+.me-input{box-sizing:border-box;width:100%;border:1px solid var(--me-border);background:var(--me-card);color:var(--me-text);border-radius:10px;padding:9px 12px;font-size:13.5px;font-family:inherit;outline:none;transition:border-color .2s ease,box-shadow .2s ease}
 .me-input:focus{border-color:var(--me-accent);box-shadow:0 0 0 3px rgba(53,89,246,.13)}
 select.me-input{appearance:none;-webkit-appearance:none;height:38px;padding-right:34px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;cursor:pointer}
 textarea.me-input{min-height:92px;resize:vertical;line-height:1.65}

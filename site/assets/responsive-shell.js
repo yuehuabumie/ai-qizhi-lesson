@@ -6,10 +6,13 @@
   style.id = 'aiq-responsive-shell'
   style.textContent = `
 html{scroll-padding-top:90px}
+/* Preflight is disabled in this build; remove the browser's 8px canvas gutter. */
+body{margin:0}
 main{min-width:0}
 main h1{text-wrap:balance}
 main .grid>*{min-width:0}
 @media(max-width:1023px), (pointer:coarse){
+  .aiq-navbar button{min-height:44px}
   .aiq-navbar .el-button.is-circle{width:44px;height:44px;min-width:44px;flex-shrink:0}
   .el-button{min-height:44px;min-width:44px}
   .el-checkbox,.el-radio,.el-switch{min-height:44px;min-width:44px}

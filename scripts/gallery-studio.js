@@ -362,6 +362,7 @@
   let modalEl = null
   let modalReturnFocus = null
   let modalKeyHandler = null
+  let modalCleanup = null
   const ctx = { router: null }
 
   function resetState(mode, id) {
@@ -412,7 +413,7 @@
       <header class="gal-head">
         <span class="gal-tag">${svgIcon('star')}成果展厅</span>
         <h2 class="gal-title"><span class="gal-grad">学生作品墙 · 看得见的成长</span></h2>
-        <p class="gal-sub">AI 发现地图、课文绘本、MR 设计方案、发明作品……互动训练里保存的作品都会出现在这里。点开卡片可以查看完整作品，支持点赞、筛选与展示汇报。</p>
+        <p class="gal-sub">AI 发现地图、课文绘本、MR 设计方案、发明作品……训练作品先存入「我的作品」，发布后才在这里展示。点开卡片查看完整作品，也可以点赞、筛选与展示汇报。</p>
       </header>
       <div class="gal-toolbar">
         <label class="gal-sr" for="gal-filter">按模块筛选作品</label>
@@ -786,7 +787,7 @@
             ${infoRow('所属模块', esc(`${module.code} ${module.name}`))}
             ${infoRow('适用学段', esc(gradeLabel(work.grade)))}
             ${infoRow('作者', esc(work.author))}
-            ${infoRow('发布时间', esc(dateText(work.createdAt)))}
+            ${infoRow('创建时间', esc(dateText(work.createdAt)))}
             ${imgs.length ? infoRow('插画', `${imgs.length} 张`) : ''}
             ${infoRow('点赞', `<span data-gal-info-likes>${work.likes}</span>`)}
           </dl>
@@ -1172,12 +1173,15 @@
       toast('只能撤下自己的作品', 'warn')
       return
     }
+    const pageRoot = root
+    const pageWorkId = S.workId
     openConfirm({
       title: '从展厅撤下这件作品？',
       message: `《${work.title}》会从展厅隐藏，作品本身和收到的赞都保留，之后可以在「我的作品」里重新发布。`,
       confirmText: '撤下',
       onConfirm: async () => {
         await api('/api/works/' + encodeURIComponent(id) + '/publish', { method: 'DELETE' })
+        if (root !== pageRoot || S.workId !== pageWorkId) return
         toast('已从展厅撤下')
         if (S.mode === 'detail' && S.work && S.work.id === id) {
           ctx.router.push({ name: 'gallery' })
@@ -1224,6 +1228,7 @@
     let drafts = []
     let hasMore = false
     let loading = false
+    let publishing = false
     createModal({
       title: '发布我的作品',
       subtitle: '从「我的作品」里挑几份上墙。已发布的作品不在这个列表里。',
@@ -1238,6 +1243,7 @@
       footer:
         '<a class="gal-btn" href="#/me/works">管理我的作品</a><button type="button" class="gal-btn" data-modal-cancel>取消</button><button type="button" class="gal-btn gal-primary" data-gal-publish disabled>发布所选</button>',
       onMount(el) {
+        const picker = el.querySelector('[data-gal-picker]')
         const head = el.querySelector('[data-gal-picker-head]')
         const list = el.querySelector('[data-gal-pick-list]')
         const all = el.querySelector('[data-gal-pick-all]')
@@ -1252,8 +1258,11 @@
           countEl.textContent = `已选 ${n} 份`
           all.checked = total > 0 && n === total
           all.indeterminate = n > 0 && n < total
-          publishBtn.disabled = n === 0
-          publishBtn.textContent = n ? `发布所选（${n}）` : '发布所选'
+          all.disabled = publishing || loading || total === 0
+          list.querySelectorAll('input[data-gal-pick]').forEach((box) => { box.disabled = publishing })
+          publishBtn.disabled = publishing || loading || n === 0
+          publishBtn.setAttribute('aria-busy', String(publishing))
+          publishBtn.textContent = publishing ? '发布中…' : n ? `发布所选（${n}）` : '发布所选'
         }
 
         function showError(msg) {
@@ -1279,15 +1288,18 @@
         async function load() {
           if (loading) return
           loading = true
+          sync()
           errEl.classList.remove('show')
           list.setAttribute('aria-busy', 'true')
           list.innerHTML = '<div class="gal-pick-loading">正在读取我的作品…</div>'
           try {
             const res = await api('/api/works/mine?status=draft&page=1&pageSize=60')
+            if (modalEl !== el) return
             drafts = (res.works || []).filter((w) => !w.hidden)
             hasMore = !!res.hasMore
             renderList()
           } catch (err) {
+            if (modalEl !== el) return
             const msg =
               err && err.status === 401
                 ? '登录已失效，请重新登录后再试'
@@ -1300,12 +1312,14 @@
           } finally {
             loading = false
             list.setAttribute('aria-busy', 'false')
+            if (modalEl === el) sync()
           }
         }
 
-        list.addEventListener('change', (e) => {
+        picker.addEventListener('change', (e) => {
           const input = e.target
           if (!(input instanceof HTMLInputElement) || input.type !== 'checkbox') return
+          if (publishing || loading) return
           if (input.hasAttribute('data-gal-pick-all')) {
             selected.clear()
             if (input.checked) drafts.forEach((w) => selected.add(w.id))
@@ -1325,10 +1339,12 @@
         })
 
         publishBtn.addEventListener('click', async () => {
-          if (publishBtn.disabled || !selected.size) return
+          if (publishing || publishBtn.disabled || !selected.size) return
           const ids = Array.from(selected)
-          publishBtn.disabled = true
-          publishBtn.textContent = '发布中…'
+          const pageRoot = root
+          const pageWorkId = S.workId
+          publishing = true
+          sync()
           errEl.classList.remove('show')
           const succeeded = new Set()
           let firstErr = ''
@@ -1340,6 +1356,10 @@
               if (!firstErr) firstErr = err.message || '发布失败'
             }
           }
+          publishing = false
+          // Closing this dialog does not cancel already requested publication.
+          // Its response must not update another route or dismiss a newer dialog.
+          if (root !== pageRoot || S.workId !== pageWorkId) return
           if (succeeded.size) {
             // 新作品不一定落在当前筛选的模块里，发布后统一回到「全部」，
             // 让学生立刻看到自己刚上墙的作品。
@@ -1353,6 +1373,7 @@
             )
             await loadWorks(true)
           }
+          if (modalEl !== el) return
           if (succeeded.size === ids.length) {
             closeModal()
             return
@@ -1383,8 +1404,9 @@
           ok.textContent = '处理中…'
           try {
             await onConfirm()
-            closeModal()
+            if (modalEl === modal) closeModal()
           } catch (err) {
+            if (modalEl !== modal) return
             ok.disabled = false
             ok.textContent = old
             toast(err.message || '操作失败，请稍后再试', 'error')
@@ -1396,26 +1418,28 @@
 
   function trapTab(e) {
     if (!modalEl) return
+    const dialog = modalEl.querySelector('.gal-modal')
     const items = Array.from(
       modalEl.querySelectorAll(
-        'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled])',
+        'button, a[href], input, select, textarea, [tabindex]',
       ),
-    ).filter((el) => el.offsetParent !== null)
-    if (!items.length) return
+    ).filter((el) => !el.disabled && el.tabIndex >= 0 && el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden')
+    if (!items.length) { e.preventDefault(); dialog.focus(); return }
     const first = items[0]
     const last = items[items.length - 1]
-    if (e.shiftKey && document.activeElement === first) {
+    if (e.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) {
       e.preventDefault()
       last.focus()
-    } else if (!e.shiftKey && document.activeElement === last) {
+    } else if (!e.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) {
       e.preventDefault()
       first.focus()
     }
   }
 
   function createModal({ title, subtitle, body, footer, onMount }) {
+    const returnFocus = modalReturnFocus || document.activeElement
     closeModal(false)
-    modalReturnFocus = document.activeElement
+    modalReturnFocus = returnFocus
     const backdrop = document.createElement('div')
     backdrop.className = 'gal-modal-backdrop'
     backdrop.innerHTML = `<div class="gal-modal" role="dialog" aria-modal="true" aria-labelledby="gal-modal-title">
@@ -1428,6 +1452,17 @@
     </div>`
     document.body.appendChild(backdrop)
     modalEl = backdrop
+    const dialog = backdrop.querySelector('.gal-modal')
+    dialog.tabIndex = -1
+    const background = [...document.body.children]
+      .filter((el) => el !== backdrop && el !== toastEl && el instanceof HTMLElement)
+      .map((el) => [el, el.inert])
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    modalCleanup = () => {
+      background.forEach(([el, inert]) => { el.inert = inert })
+      document.body.style.overflow = previousOverflow
+    }
     backdrop.addEventListener('mousedown', (e) => {
       if (e.target === backdrop) closeModal()
     })
@@ -1439,6 +1474,7 @@
       if (!modalEl) return
       if (e.key === 'Escape') {
         e.preventDefault()
+        e.stopPropagation()
         closeModal()
         return
       }
@@ -1450,10 +1486,10 @@
     } catch (err) {
       console.warn('[gallery-studio] 弹层初始化失败', err)
     }
-    const focusable =
-      backdrop.querySelector('[data-autofocus]') ||
-      backdrop.querySelector('button, input, select, textarea, a[href]')
-    if (focusable) focusable.focus()
+    const focusable = [...backdrop.querySelectorAll('[data-autofocus],button,input,select,textarea,a[href]')]
+      .filter((el) => !el.disabled && el.tabIndex >= 0 && el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden')
+    ;(focusable.find((el) => el.hasAttribute('data-autofocus')) || focusable[0] || dialog).focus({ preventScroll: true })
+    background.forEach(([el]) => { el.inert = true })
     return backdrop
   }
 
@@ -1464,6 +1500,8 @@
     const el = modalEl
     modalEl = null
     el.remove()
+    if (modalCleanup) modalCleanup()
+    modalCleanup = null
     if (restoreFocus && modalReturnFocus && document.contains(modalReturnFocus)) {
       try {
         modalReturnFocus.focus({ preventScroll: true })
@@ -1941,7 +1979,7 @@
 .gal-panel{background:var(--gal-card);border:1px solid var(--gal-border);border-radius:20px}
 .gal-main{padding:22px 24px}
 .gal-image-strip{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px;margin-bottom:20px}
-.gal-image-strip img{display:block;width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:14px;border:1px solid var(--gal-border);background:var(--gal-soft)}
+.gal-image-strip img{display:block;width:100%;aspect-ratio:4/3;object-fit:contain;border-radius:14px;border:1px solid var(--gal-border);background:var(--gal-soft)}
 .gal-side{display:flex;flex-direction:column;gap:14px}
 @media(min-width:1024px){.gal-side{position:sticky;top:88px;align-self:start}}
 .gal-sec-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px}
@@ -1960,7 +1998,7 @@
 @media(min-width:640px){.gal-spread{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .gal-face{--gal-face-pad:20px;position:relative;display:flex;flex-direction:column;min-height:220px;padding:var(--gal-face-pad) var(--gal-face-pad) calc(var(--gal-face-pad) + 6px);background:linear-gradient(180deg,rgba(255,255,255,.62),rgba(255,255,255,.08))}
 .gal-face-media{display:block;overflow:hidden;margin:calc(-1 * var(--gal-face-pad)) calc(-1 * var(--gal-face-pad)) 14px;aspect-ratio:4/3;background:var(--gal-soft);border-bottom:1px solid var(--gal-border)}
-.gal-face-media img{display:block;width:100%;height:100%;object-fit:cover}
+.gal-face-media img{display:block;width:100%;height:100%;object-fit:contain}
 .dark .gal-face{background:linear-gradient(180deg,rgba(255,255,255,.05),transparent)}
 .gal-face+.gal-face{border-top:1px dashed var(--gal-border)}
 @media(min-width:640px){.gal-face+.gal-face{border-top:0;border-left:1px dashed var(--gal-border)}}
@@ -2099,7 +2137,7 @@
 .gal-form-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
 .gal-field{display:flex;flex-direction:column;min-width:0}
 .gal-field label{font-size:12.5px;color:var(--gal-mute);margin-bottom:6px}
-.gal-input{width:100%;border:1px solid var(--gal-border);background:var(--gal-card);color:var(--gal-text);border-radius:10px;padding:9px 12px;font-size:13.5px;font-family:inherit;outline:none;transition:border-color .2s ease,box-shadow .2s ease}
+.gal-input{box-sizing:border-box;width:100%;border:1px solid var(--gal-border);background:var(--gal-card);color:var(--gal-text);border-radius:10px;padding:9px 12px;font-size:13.5px;font-family:inherit;outline:none;transition:border-color .2s ease,box-shadow .2s ease}
 .gal-input:focus{border-color:var(--gal-accent);box-shadow:0 0 0 3px rgba(53,89,246,.12)}
 select.gal-input{appearance:none;-webkit-appearance:none;height:38px;padding-right:34px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;cursor:pointer}
 textarea.gal-input{min-height:86px;resize:vertical;line-height:1.6}
@@ -2111,6 +2149,7 @@ textarea.gal-input{min-height:86px;resize:vertical;line-height:1.6}
 /* 从个人作品挑选发布 */
 .gal-picker{display:flex;flex-direction:column;gap:12px;margin-top:16px}
 .gal-picker-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.gal-picker-head[hidden]{display:none}
 .gal-pick-all{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;color:var(--gal-soft-text);cursor:pointer}
 .gal-pick-count{font-size:12px;color:var(--gal-mute)}
 .gal-picker-list{display:flex;flex-direction:column;gap:8px;max-height:min(46vh,380px);overflow:auto;padding:2px}

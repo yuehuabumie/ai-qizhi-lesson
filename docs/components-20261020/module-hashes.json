@@ -1,0 +1,10 @@
+{
+  "hashAlgorithm": "SHA-256",
+  "files": {
+    "site/index.html": "8b2cfc79c86dfa6801b4e00d0b375084af552d021bf065daaf9e813b6746520b",
+    "scripts/class-studio.js": "243d75a8f9cad8ec060b1e0170e7ffc06337820e546109c9871c4ffcbd42311d",
+    "scripts/gallery-studio.js": "ec90e113a2d85b3a1b77078d6ef4c5f38134e116e3bdac0c1a040bd5bdaad115",
+    "scripts/me-studio.js": "7eea8b0c53b68b67bc67af502f75a3a70889c8417a46870eb01dae9842c9921f",
+    "scripts/responsive-shell.js": "de32d0fff2898a89ab9ad786959c6a05616c800fe0d625d39a5b1d82a1a5a329"
+  }
+}
