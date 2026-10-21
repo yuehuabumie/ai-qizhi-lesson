@@ -749,8 +749,9 @@ OTHER DEALINGS IN THE SOFTWARE.
   flex: none;
 }
 .prep-message.is-user .prep-message-avatar {
-  background: var(--prep-soft);
-  color: var(--prep-accent);
+  background: #4f46e5;
+  color: #fff;
+  border: 1px solid #4338ca;
 }
 .prep-message-body {
   flex: 1;

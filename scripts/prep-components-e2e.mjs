@@ -285,6 +285,13 @@ try {
       await settleTransitions()
       await check(`preparation layout fits ${width}px ${theme}`, `document.documentElement.scrollWidth<=${width}+1 && document.querySelector('.prep-layout').getBoundingClientRect().right<=${width}+1 && (innerWidth>=640 || getComputedStyle(document.querySelector('.prep-sidebar')).display==='none') && [...document.querySelectorAll('.prep-chat :is(button,textarea)')].filter(e=>e.getClientRects().length).every(e=>e.getBoundingClientRect().right<=${width}+1)`)
       await check(`send action stays compact and right aligned at ${width}px ${theme}`, `(()=>{const send=document.querySelector('[data-prep-send]').getBoundingClientRect(),input=document.querySelector('#prep-message').getBoundingClientRect(),attach=document.querySelector('[data-prep-action="attach"]').getBoundingClientRect();return send.width>=80 && send.width<=96 && send.height>=44 && Math.abs(send.right-input.right)<=1 && attach.right+8<=send.left && Math.abs(attach.top-send.top)<=1})()`)
+      await check(`teacher avatar has an opaque contrasting surface at ${width}px ${theme}`, `(()=>{
+        const avatar=document.querySelector('.prep-message.is-user .prep-message-avatar'),style=getComputedStyle(avatar);
+        const rgb=value=>(value.match(/[\\d.]+/g)||[]).map(Number);
+        const lum=rgb=>rgb.slice(0,3).map(v=>v/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4).reduce((sum,v,i)=>sum+v*[.2126,.7152,.0722][i],0);
+        const background=rgb(style.backgroundColor),colors=[lum(rgb(style.color)),lum(background)].sort((a,b)=>b-a);
+        return style.opacity==='1' && (background.length===3 || background[3]===1) && style.color==='rgb(255, 255, 255)' && (colors[0]+.05)/(colors[1]+.05)>=4.5 && avatar.textContent==='我';
+      })()`)
       await check(`Markdown and generated files remain bounded at ${width}px ${theme}`, `(()=>{const thread=document.querySelector('[data-prep-thread]').getBoundingClientRect();return [...document.querySelectorAll('[data-prep-thread] :is(table,pre,.prep-artifact-card)')].every(e=>e.getBoundingClientRect().right<=thread.right+1) && document.querySelector('[data-prep-thread] [data-prep-artifact="f1"] a.is-artifact').getBoundingClientRect().height>=44})()`)
       await check(`download controls and Markdown links retain readable contrast at ${width}px ${theme}`, `(()=>{
         const rgb=value=>(value.match(/[\\d.]+/g)||[]).map(Number);
