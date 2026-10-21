@@ -2011,95 +2011,7 @@
   const ClassComponent = makeComponent('ClassStudioClass', 'class')
   const AssignmentComponent = makeComponent('ClassStudioAssignment', 'assignment')
 
-  // ── 主导航入口 ─────────────────────────────────────────────
-  const NAV_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${ICONS.users}</svg>`
-
-  function navActive() {
-    const hash = window.location.hash || ''
-    return hash === '#/me/classes' || hash.startsWith('#/me/classes/')
-  }
-
-  function syncNavActive() {
-    const on = navActive()
-    document.querySelectorAll('[data-cls-nav-tab]').forEach((el) => {
-      el.classList.toggle('is-active', on)
-      if (on) el.setAttribute('aria-current', 'page')
-      else el.removeAttribute('aria-current')
-    })
-  }
-
-  function injectDesktopNav() {
-    const nav = document.querySelector('header nav')
-    if (!nav) return
-    if (nav.querySelector('[data-cls-nav-tab]')) return syncNavActive()
-    const teach = nav.querySelector('a[href="#/teach"]')
-    const link = document.createElement('a')
-    link.href = '#/me/classes'
-    link.className = 'nav-item rounded-xl px-3.5 py-2 text-[14px] font-medium'
-    link.textContent = '班级管理'
-    link.setAttribute('data-cls-nav-tab', '')
-    if (teach) teach.after(link)
-    else nav.appendChild(link)
-    syncNavActive()
-  }
-
-  function closeDrawer() {
-    const btn = document.querySelector('.el-drawer__close-btn')
-    if (btn) {
-      btn.click()
-      return
-    }
-    // 站点的抽屉没有头部/关闭按钮，用 Esc 走 Element Plus 自带的关闭逻辑
-    document.dispatchEvent(
-      new KeyboardEvent('keydown', {
-        key: 'Escape',
-        code: 'Escape',
-        bubbles: true,
-        cancelable: true,
-      }),
-    )
-  }
-
-  function injectDrawerNav() {
-    const body = document.querySelector('.el-drawer__body')
-    if (!body) return
-    if (body.querySelector('[data-cls-nav-tab]')) return syncNavActive()
-    const teach = body.querySelector('a[href="#/teach"]')
-    const gallery = body.querySelector('a[href="#/gallery"]')
-    if (!teach && !gallery) return
-    const link = document.createElement('a')
-    link.href = '#/me/classes'
-    link.className = 'flex items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium'
-    link.style.boxSizing = 'border-box'
-    link.style.minHeight = '44px'
-    link.innerHTML = `<i class="el-icon" style="font-size:16px;">${NAV_ICON}</i>班级管理`
-    link.setAttribute('data-cls-nav-tab', '')
-    link.addEventListener('click', () => setTimeout(closeDrawer, 0))
-    ;(teach || gallery).after(link)
-    syncNavActive()
-  }
-
-  let navRaf = 0
-  function scheduleNavSync() {
-    if (navRaf) return
-    navRaf = requestAnimationFrame(() => {
-      navRaf = 0
-      injectDesktopNav()
-      injectDrawerNav()
-      syncNavActive()
-    })
-  }
-
-  function installNavTab() {
-    ensureStyle()
-    scheduleNavSync()
-    // 导航和移动抽屉都是运行时渲染的，用观察器保证登录/切页/开抽屉后仍存在
-    new MutationObserver(scheduleNavSync).observe(document.body, {
-      childList: true,
-      subtree: true,
-    })
-    window.addEventListener('hashchange', syncNavActive)
-  }
+  // 班级管理入口由「课堂教学」的页内导航统一提供。
 
   // ── 启动 ───────────────────────────────────────────────────
   function waitFor(fn, timeoutMs = 15000) {
@@ -2150,8 +2062,6 @@
       component: AssignmentComponent,
       meta: { title: '作业完成情况', requiresAuth: true },
     })
-
-    installNavTab()
 
     try {
       await router.isReady()
@@ -2536,21 +2446,6 @@
   .cls-groups-head>.cls-btn{width:100%}
   .cls-group-controls{grid-template-columns:minmax(0,1fr)}
   .cls-group-controls button{width:100%}
-}
-
-/* Injected links do not inherit Vue's compiled data-v scope attributes. */
-[data-cls-nav-tab]{color:var(--aiq-text-soft);background:transparent;text-decoration:none!important;transition:color .22s ease,background .22s ease}
-[data-cls-nav-tab]:hover{color:var(--aiq-accent);background:var(--aiq-nav-hover)}
-[data-cls-nav-tab].is-active{color:#fff;background:linear-gradient(135deg,#4f7cff,#7c4dff);box-shadow:0 10px 22px -12px #4f7cffe6;font-weight:600}
-html.dark [data-cls-nav-tab].is-active{color:#fff;box-shadow:0 10px 22px -14px #000000e6}
-[data-cls-nav-tab]:focus-visible{outline:2px solid var(--aiq-accent);outline-offset:3px}
-
-/* 顶部主导航多一个标签后，1024–1365 宽度收紧内边距，避免横向溢出 */
-@media (min-width:1024px) and (max-width:1279px){
-  .aiq-navbar nav a.nav-item{padding-left:8px;padding-right:8px;font-size:13.5px}
-}
-@media (min-width:1280px) and (max-width:1365px){
-  .aiq-navbar nav a.nav-item{padding-left:10px;padding-right:10px}
 }
 
 /* 头部的 backdrop-filter 会成为 Element Plus 抽屉 fixed 层的包含块，

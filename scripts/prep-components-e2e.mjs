@@ -7,7 +7,7 @@ import { prepBrowserSource } from './lib/prep-browser-source.mjs'
 const source = prepBrowserSource()
   .replace('  boot().catch((e) =>', '  Promise.resolve().catch((e) =>')
   .replace(/\}\)\(\)\s*$/, `
-    globalThis.__prepTest = { mount(id='') {mountPage({$el:null},id)}, openSession, poll, unmountPage, injectNav };
+    globalThis.__prepTest = { mount(id='') {mountPage({$el:null},id)}, openSession, poll, unmountPage };
   })()`)
 const lessonMarkdown = `## 科学探究教案
 
@@ -53,6 +53,12 @@ async function phoneShots(name,{panel='chat',scrollTo='',openDetails=false}={}){
 async function check(name, expression) { assert.ok(await browser.evaluate(expression), name); console.log(`PASS ${name}`); passed++ }
 async function click(selector) { await browser.evaluate(`document.querySelector(${JSON.stringify(selector)}).focus();document.querySelector(${JSON.stringify(selector)}).click()`) }
 async function key(name, modifiers=0) { await browser.page.send('Input.dispatchKeyEvent',{type:'keyDown',key:name,modifiers,windowsVirtualKeyCode:name==='Escape'?27:name==='Tab'?9:undefined}); await browser.page.send('Input.dispatchKeyEvent',{type:'keyUp',key:name}) }
+async function enter(shift=false) {
+  const modifiers=shift?8:0
+  const base={key:'Enter',code:'Enter',windowsVirtualKeyCode:13,nativeVirtualKeyCode:13,modifiers}
+  await browser.page.send('Input.dispatchKeyEvent',{...base,type:'keyDown',text:'\r',unmodifiedText:'\r'})
+  await browser.page.send('Input.dispatchKeyEvent',{...base,type:'keyUp'})
+}
 try {
   await browser.evaluate(`
     document.head.innerHTML='<meta name="viewport" content="width=device-width, initial-scale=1">';
@@ -109,7 +115,7 @@ try {
       throw new Error('Unexpected mocked API: '+method+' '+path);
     };
     ${source}
-    __prepTest.injectNav();__prepTest.mount('s1');
+    __prepTest.mount('s1');
   `)
   await browser.waitFor(`document.querySelector('[data-prep-title]')?.textContent==='科学探究课' && !document.querySelector('[data-prep-action=new]').disabled`)
   await check('untrusted conversation content is text rather than executable markup', `!window.__xss && !document.querySelector('[data-prep-thread] img') && document.querySelector('[data-prep-thread]').textContent.includes('<img src=x')`)
@@ -301,7 +307,22 @@ try {
   await click('[data-prep-action=fullscreen]')
   await browser.evaluate(`__prepTest.unmountPage()`)
   await check('route unmount while fullscreen restores the host app and document scrolling', `!document.querySelector('[data-prep-root]') && document.querySelector('#app').inert===__fullBefore.appInert && document.body.style.overflow===__fullBefore.bodyOverflow && document.documentElement.style.overflow===__fullBefore.documentOverflow`)
-  await browser.evaluate(`__enabled=false;__prepTest.mount('s2')`)
+  await browser.setViewport(1366,900,{mobile:false})
+  await browser.evaluate(`__enabled=true;__owner='teacher1';__deferStatus=false;__details.s2.activeRun=null;__details.s2.messages=[];__details.s2.attachments=[];__prepTest.mount('s2')`)
+  await browser.waitFor(`document.querySelector('[data-prep-title]')?.textContent==='第二个独立对话' && !document.querySelector('#prep-message').disabled`)
+  await check('the composer explains Enter sends and Shift+Enter adds a line break', `document.querySelector('#prep-input-help').textContent.includes('Enter 发送') && document.querySelector('#prep-input-help').textContent.includes('Shift+Enter 换行')`)
+  await browser.evaluate(`(()=>{const t=document.querySelector('#prep-message');window.__keyBefore=__requests.filter(r=>r.p.endsWith('/messages')).length;t.value='第一行';t.dispatchEvent(new Event('input',{bubbles:true}));t.focus();t.setSelectionRange(3,3)})()`)
+  await enter(true)
+  await browser.waitFor(`document.querySelector('#prep-message').value==='第一行\\n'`)
+  await check('Shift+Enter inserts a newline without sending', `__requests.filter(r=>r.p.endsWith('/messages')).length===window.__keyBefore && document.querySelector('#prep-message').value==='第一行\\n'`)
+  await browser.evaluate(`(()=>{const t=document.querySelector('#prep-message');window.__composeBefore=__requests.filter(r=>r.p.endsWith('/messages')).length;window.__composeNotPrevented=t.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',keyCode:229,isComposing:true,bubbles:true,cancelable:true}))})()`)
+  await browser.evaluate(`new Promise(r=>setTimeout(r,80))`)
+  await check('Enter during IME composition is left to the input method', `window.__composeNotPrevented===true && __requests.filter(r=>r.p.endsWith('/messages')).length===window.__composeBefore`)
+  await browser.evaluate(`(()=>{const t=document.querySelector('#prep-message');t.value='回车发送测试';t.dispatchEvent(new Event('input',{bubbles:true}));t.focus();t.setSelectionRange(t.value.length,t.value.length);window.__enterBefore=__requests.filter(r=>r.p.endsWith('/messages')).length})()`)
+  await enter(false)
+  await browser.waitFor(`document.querySelector('#prep-message').value==='' && __details.s2.messages.some(m=>m.content==='回车发送测试')`)
+  await check('Enter sends the message without adding a newline', `__requests.filter(r=>r.p.endsWith('/messages')).length===window.__enterBefore+1 && __details.s2.messages.at(-1).content==='回车发送测试'`)
+  await browser.evaluate(`__enabled=false;__details.s2.activeRun=null;__details.s2.messages=[];__details.s2.events=[];__prepTest.mount('s2')`)
   await browser.waitFor(`!document.querySelector('[data-prep-disabled]').hidden`)
   await check('an unconfigured runtime is clearly disabled without simulated AI activity', `document.querySelector('[data-prep-send]').disabled && document.querySelector('[data-prep-disabled]').textContent.includes('尚未启用') && !document.querySelector('[data-prep-stream]')`)
   if(process.env.E2E_OUTPUT){mkdirSync(process.env.E2E_OUTPUT,{recursive:true});await browser.screenshot(process.env.E2E_OUTPUT+'/prep-phone.png')}

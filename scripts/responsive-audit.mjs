@@ -237,13 +237,14 @@ try {
       }
       if (w < 1024) {
         await p.evaluate(`document.querySelector('header button[class~="lg:hidden"]').click()`)
-        await p.waitFor('!!document.querySelector(".el-drawer__body [data-cls-nav-tab]")', 6000, 'mobile drawer')
+        await p.waitFor('!!document.querySelector(".el-drawer__body a[href=\\"#/teach\\"]")', 6000, 'mobile drawer')
         await new Promise((r) => setTimeout(r, 350))
         await shot(p, `site-drawer-${vp}`)
-        check(`抽屉高度与触控行-${vp}`, await p.evaluate(`(() => { const d=document.querySelector('.el-drawer'), link=d.querySelector('[data-cls-nav-tab]'); return d.getBoundingClientRect().height > innerHeight - 20 && link.getBoundingClientRect().height >= 44 })()`))
-        await p.evaluate(`document.querySelector('.el-drawer__body [data-cls-nav-tab]').click()`)
+        check(`抽屉高度与触控行-${vp}`, await p.evaluate(`(() => { const d=document.querySelector('.el-drawer'), link=d.querySelector('a[href="#/teach"]'); return d.getBoundingClientRect().height > innerHeight - 20 && link.getBoundingClientRect().height >= 44 && d.querySelectorAll('[data-prep-nav],[data-cls-nav-tab]').length === 0 })()`))
+        await p.evaluate(`document.querySelector('.el-drawer__body a[href="#/teach"]').click()`)
         await p.waitFor('!document.querySelector(".el-overlay") || getComputedStyle(document.querySelector(".el-overlay")).display === "none"', 6000, 'drawer closed')
-        check(`抽屉点击班级后关闭-${vp}`, await p.evaluate(`location.hash === '#/me/classes'`))
+        await p.waitFor('!!document.querySelector("[data-teach-hub]")', 6000, 'teaching hub')
+        check(`抽屉点击课堂教学后关闭并进入统一入口-${vp}`, await p.evaluate(`location.hash === '#/teach' && document.querySelector('[data-teach-hub] a[aria-current="page"]')?.getAttribute('href') === '#/teach'`))
       }
     }
   }

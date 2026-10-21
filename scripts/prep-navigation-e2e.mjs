@@ -47,7 +47,7 @@ const base='http://127.0.0.1:'+server.address().port
 const browser=await launch()
 let passed=0
 try {
-  await browser.goto(base+'/#/',`document.querySelectorAll('header.aiq-navbar nav a').length===10 && document.querySelector('header.aiq-navbar').textContent.includes('这是一个很长')`)
+  await browser.goto(base+'/#/',`document.querySelectorAll('header.aiq-navbar nav a').length===8 && !document.querySelector('[data-prep-nav],[data-cls-nav-tab]') && document.querySelector('header.aiq-navbar').textContent.includes('这是一个很长')`)
   for(const width of [1024,1100,1152,1200,1279,1280,1366,1440,1535]){
     await browser.setViewport(width,900,{mobile:false})
     const m=await browser.evaluate(`(()=>{const h=document.querySelector('header.aiq-navbar'),n=h.querySelector('nav'),nr=n.getBoundingClientRect(),links=[...n.querySelectorAll('a')].map(a=>{const r=a.getBoundingClientRect();return {text:a.textContent.trim(),left:r.left,right:r.right,top:r.top,bottom:r.bottom}});const controls=[...h.querySelectorAll('button,.el-select')].filter(e=>e.getClientRects().length&&getComputedStyle(e).display!=='none').map(e=>{const r=e.getBoundingClientRect();return {text:e.textContent.trim(),left:r.left,right:r.right,top:r.top,bottom:r.bottom}});const logo=h.querySelector('a[href="#/"]')?.getBoundingClientRect(),menu=h.querySelector('button[class~="lg:hidden"]')?.getBoundingClientRect();return {doc:document.documentElement.scrollWidth,navVisible:getComputedStyle(n).display!=='none',nav:{left:nr.left,right:nr.right,top:nr.top,bottom:nr.bottom},logo:logo?{left:logo.left,right:logo.right}:null,menu:menu?{left:menu.left,right:menu.right,width:menu.width,height:menu.height}:null,links,controls}})()`)
@@ -60,13 +60,32 @@ try {
     assert.ok(m.links.every(l=>l.left>=m.nav.left-1&&l.right<=m.nav.right+1&&l.bottom-l.top<=44),`link clipping or wrapping at ${width}`)
     console.log(`PASS complete navigation ${width}px`);passed++
   }
-  await browser.goto(base+'/#/prep',`!!document.querySelector('[data-prep-root]') && !document.querySelector('[data-prep-action=new]').disabled`)
-  assert.equal(await browser.evaluate(`document.querySelectorAll('header.aiq-navbar nav [data-prep-nav]').length`),1)
-  assert.equal(await browser.evaluate(`document.querySelector('[data-prep-nav]').getAttribute('aria-current')`),'page')
-  console.log('PASS standalone prep route and active navigation');passed++
+  await browser.goto(base+'/#/prep',`!!document.querySelector('[data-prep-root] .prep-wrap [data-teach-hub]') && !document.querySelector('[data-prep-action=new]').disabled`)
+  const prepHub=await browser.evaluate(`(()=>{const h=document.querySelector('[data-teach-hub]'),t=document.querySelector('header.aiq-navbar a[href="#/teach"]');return {labels:[...h.querySelectorAll('a')].map(a=>a.textContent.trim()),hrefs:[...h.querySelectorAll('a')].map(a=>a.getAttribute('href')),active:h.querySelector('[aria-current=page]')?.getAttribute('href'),first:h.parentElement.firstElementChild===h,topCurrent:t.getAttribute('aria-current'),topActive:t.classList.contains('is-active'),tabs:document.querySelectorAll('[data-prep-nav],[data-cls-nav-tab]').length}})()`)
+  assert.deepEqual(prepHub.labels,['教师工具箱','智能备课','班级管理'])
+  assert.deepEqual(prepHub.hrefs,['#/teach','#/prep','#/me/classes'])
+  assert.equal(prepHub.active,'#/prep')
+  assert.equal(prepHub.first,true)
+  assert.equal(prepHub.topCurrent,'page')
+  assert.equal(prepHub.topActive,true)
+  assert.equal(prepHub.tabs,0)
+  console.log('PASS smart prep lives under 课堂教学 with a three-entry hub and no separate top-nav tab');passed++
   await browser.setViewport(1280,900,{mobile:false})
-  assert.equal(await browser.evaluate(`(()=>{const h=document.querySelector('header.aiq-navbar'),n=h.querySelector('nav').getBoundingClientRect();return document.documentElement.scrollWidth<=1281&&[...h.querySelectorAll('button,.el-select')].filter(e=>e.getClientRects().length).every(e=>{const r=e.getBoundingClientRect();return r.right<=n.left+1||r.left>=n.right-1||!r.width})})()`),true)
-  console.log('PASS active prep navigation fits 1280px with logged-in controls');passed++
+  assert.equal(await browser.evaluate(`(()=>{const h=document.querySelector('header.aiq-navbar'),n=h.querySelector('nav').getBoundingClientRect(),hub=document.querySelector('[data-teach-hub]').getBoundingClientRect();return document.documentElement.scrollWidth<=1281&&hub.left>=0&&hub.right<=innerWidth+1&&[...h.querySelectorAll('button,.el-select')].filter(e=>e.getClientRects().length).every(e=>{const r=e.getBoundingClientRect();return r.right<=n.left+1||r.left>=n.right-1||!r.width})})()`),true)
+  console.log('PASS teaching hub and active navigation fit 1280px with logged-in controls');passed++
+  await browser.setViewport(390,844,{mobile:true})
+  const mobileHub=await browser.evaluate(`(()=>{const h=document.querySelector('[data-teach-hub]'),r=h.getBoundingClientRect(),links=[...h.querySelectorAll('a')].map(a=>{const b=a.getBoundingClientRect();return {w:b.width,h:b.height,right:b.right}});return {left:r.left,right:r.right,doc:document.documentElement.scrollWidth,links}})()`)
+  assert.ok(mobileHub.left>=0&&mobileHub.right<=391&&mobileHub.doc<=391,`mobile teaching hub overflows: ${JSON.stringify(mobileHub)}`)
+  assert.ok(mobileHub.links.length===3&&mobileHub.links.every(l=>l.h>=44&&l.right<=391),`mobile teaching hub targets too small: ${JSON.stringify(mobileHub)}`)
+  console.log('PASS three-entry teaching hub remains usable at 390px');passed++
+  await browser.evaluate(`document.querySelector('header.aiq-navbar button[class~="lg:hidden"]').click()`)
+  await browser.waitFor(`!!document.querySelector('.el-drawer__body a[href="#/teach"]') && getComputedStyle(document.querySelector('.el-overlay')).display!=='none'`)
+  assert.ok(await browser.evaluate(`(()=>{const d=document.querySelector('.el-drawer__body'),t=d.querySelector('a[href="#/teach"]');return d.querySelectorAll('a[href="#/teach"]').length===1 && !d.querySelector('a[href="#/prep"],a[href="#/me/classes"]') && t.classList.contains('is-active') && t.getAttribute('aria-current')==='page' && d.querySelectorAll('[data-prep-nav],[data-cls-nav-tab]').length===0})()`))
+  console.log('PASS mobile drawer keeps 课堂教学 as the only teaching entry and marks it current');passed++
+  await browser.page.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
+  await browser.page.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
+  await browser.waitFor(`!document.querySelector('.el-overlay') || getComputedStyle(document.querySelector('.el-overlay')).display==='none'`)
+  await browser.setViewport(1280,900,{mobile:false})
   await browser.evaluate(`document.querySelector('#prep-message').value='首节课的备课材料';document.querySelector('#prep-message').dispatchEvent(new Event('input',{bubbles:true}));const files=new DataTransfer();files.items.add(new File(['lesson material'],'课堂材料.txt',{type:'text/plain'}));document.querySelector('#prep-message').dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:files}))`)
   await browser.waitFor(`location.hash.includes('/prep/nav1') && document.querySelector('.prep-upload')?.textContent.includes('KB') && !document.querySelector('[data-prep-send]').disabled`)
   assert.equal(await browser.evaluate(`document.querySelector('#prep-message').value`),'首节课的备课材料')
@@ -93,11 +112,20 @@ try {
   }
   await browser.setViewport(1366,900,{mobile:false})
   await browser.evaluate(`document.querySelector('[data-prep-action=fullscreen]').click()`)
-  assert.ok(await browser.evaluate(`document.querySelector('[data-prep-root]').parentElement===document.body && document.querySelector('#app').inert`))
-  console.log('PASS fullscreen escapes compiled route containers and disables background controls');passed++
+  assert.ok(await browser.evaluate(`document.querySelector('[data-prep-root]').parentElement===document.body && document.querySelector('#app').inert && getComputedStyle(document.querySelector('[data-teach-hub]')).display==='none'`))
+  console.log('PASS fullscreen escapes compiled route containers and hides the teaching hub');passed++
   await browser.evaluate(`document.querySelector('.prep-heading-actions a[href="#/me/classes"]').click()`)
-  await browser.waitFor(`location.hash==='#/me/classes' && !document.querySelector('[data-prep-root]')`)
+  await browser.waitFor(`location.hash==='#/me/classes' && !!document.querySelector('.cls-container [data-teach-hub] a[aria-current="page"]') && !document.querySelector('[data-prep-root]')`)
   assert.ok(await browser.evaluate(`!document.querySelector('#app').inert && document.documentElement.style.overflow!== 'hidden'`))
-  console.log('PASS real Vue navigation exits fullscreen and restores the site');passed++
+  assert.ok(await browser.evaluate(`(()=>{const h=document.querySelector('.cls-container [data-teach-hub]'),t=document.querySelector('header.aiq-navbar a[href="#/teach"]');return h.querySelector('[aria-current=page]').getAttribute('href')==='#/me/classes' && t.getAttribute('aria-current')==='page' && t.classList.contains('is-active') && document.querySelectorAll('[data-prep-nav],[data-cls-nav-tab]').length===0})()`))
+  console.log('PASS real Vue navigation exits fullscreen and opens 班级管理 inside the teaching hub');passed++
+  await browser.evaluate(`document.querySelector('[data-teach-hub] a[href="#/teach"]').click()`)
+  await browser.waitFor(`location.hash==='#/teach' && !!document.querySelector('.teach-tabs') && document.querySelector('[data-teach-hub] a[aria-current="page"]')?.getAttribute('href')==='#/teach'`)
+  assert.ok(await browser.evaluate(`document.querySelector('header.aiq-navbar a[href="#/teach"]').classList.contains('is-active') && document.querySelectorAll('[data-prep-nav],[data-cls-nav-tab]').length===0`))
+  console.log('PASS 教师工具箱 opens from the hub with 课堂教学 highlighted');passed++
+  await browser.evaluate(`document.querySelector('[data-teach-hub] a[href="#/prep"]').click()`)
+  await browser.waitFor(`location.hash==='#/prep' && !!document.querySelector('[data-prep-root] .prep-wrap [data-teach-hub] a[aria-current="page"]') && document.querySelector('[data-teach-hub] a[aria-current="page"]').getAttribute('href')==='#/prep'`)
+  assert.ok(await browser.evaluate(`document.querySelector('header.aiq-navbar a[href="#/teach"]').getAttribute('aria-current')==='page' && document.querySelectorAll('[data-prep-nav],[data-cls-nav-tab]').length===0`))
+  console.log('PASS 智能备课 opens from the hub with 课堂教学 highlighted');passed++
   console.log(`备课全站导航验收 ${passed}/${passed} 通过`)
 } finally {await browser.close();await new Promise(resolve=>server.close(resolve))}
