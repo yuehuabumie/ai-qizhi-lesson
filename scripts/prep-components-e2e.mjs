@@ -2,30 +2,53 @@
 import assert from 'node:assert/strict'
 import { readFileSync, mkdirSync } from 'node:fs'
 import { launch } from './lib/cdp-kit.mjs'
+import { prepBrowserSource } from './lib/prep-browser-source.mjs'
 
-const source = readFileSync(new URL('./prep-studio.js', import.meta.url), 'utf8')
+const source = prepBrowserSource()
   .replace('  boot().catch((e) =>', '  Promise.resolve().catch((e) =>')
   .replace(/\}\)\(\)\s*$/, `
     globalThis.__prepTest = { mount(id='') {mountPage({$el:null},id)}, openSession, poll, unmountPage, injectNav };
   })()`)
+const lessonMarkdown = `## 科学探究教案
+
+请**核对名单**，再确认创建。
+
+- 观察现象
+- 记录结果
+
+> 让每位学生先独立思考。
+
+| 环节 | 时间 |
+| --- | --- |
+| 实验 | 10 分钟 |
+
+\`\`\`js
+const sample = '<img onerror="window.__markdownXss=1">';
+\`\`\`
+
+[课程资料](https://example.edu/lesson) [危险地址](javascript:alert(1))
+
+<img src=x onerror="window.__markdownXss=1">`
 const css = readFileSync(new URL('../site/assets/index-D-SlqVZT.css', import.meta.url), 'utf8')
 const responsive = readFileSync(new URL('./responsive-shell.js', import.meta.url), 'utf8')
 const browser = await launch()
 let passed = 0
 const output = process.env.E2E_OUTPUT
 if(output) mkdirSync(output,{recursive:true})
+async function settleTransitions(){await browser.evaluate(`Promise.allSettled(document.getAnimations().map(a=>a.finished))`)}
 async function phoneShots(name,{panel='chat',scrollTo='',openDetails=false}={}){
   if(!output)return
   await browser.waitFor(`!document.querySelector('.prep-toast:not([hidden])')`)
-  const before=await browser.evaluate(`({width:innerWidth,height:innerHeight,dark:document.documentElement.classList.contains('dark'),panel:document.querySelector('[data-prep-root]').dataset.panel})`)
+  const before=await browser.evaluate(`({width:innerWidth,height:innerHeight,dark:document.documentElement.classList.contains('dark'),panel:document.querySelector('[data-prep-root]').dataset.panel,threadTop:document.querySelector('[data-prep-thread]').scrollTop})`)
   for(const [width,height] of [[320,740],[390,844]]){
     await browser.setViewport(width,height,{mobile:true})
-    await browser.evaluate(`(()=>{document.documentElement.classList.remove('dark');document.querySelector('[data-prep-panel="${panel}"]').click();window.scrollTo(0,0);const modal=document.querySelector('.prep-modal');if(modal)modal.scrollTop=0;${openDetails?`document.querySelectorAll('[data-prep-events] details').forEach(e=>e.open=true);`:''}${scrollTo?`document.querySelector(${JSON.stringify(scrollTo)})?.scrollIntoView({block:'start'});`:''}})()`)
+    await browser.evaluate(`(()=>{document.documentElement.classList.remove('dark');document.querySelector('[data-prep-panel="${panel}"]').click();window.scrollTo(0,0);document.querySelector('[data-prep-thread]').scrollTop=0;const modal=document.querySelector('.prep-modal');if(modal)modal.scrollTop=0;${openDetails?`document.querySelectorAll('[data-prep-events] details').forEach(e=>e.open=true);`:''}${scrollTo?`document.querySelector(${JSON.stringify(scrollTo)})?.scrollIntoView({block:'start'});`:''}})()`)
+    await settleTransitions()
     assert.ok(await browser.evaluate(`document.documentElement.scrollWidth<=${width}+1`),`screenshot ${name} has no ${width}px horizontal overflow`)
     await browser.screenshot(`${output}/${name}-${width}.png`)
   }
   await browser.setViewport(before.width,before.height,{mobile:before.width<1024})
-  await browser.evaluate(`document.documentElement.classList.toggle('dark',${before.dark});document.querySelector('[data-prep-panel="${before.panel}"]').click()`)
+  await browser.evaluate(`document.documentElement.classList.toggle('dark',${before.dark});document.querySelector('[data-prep-panel="${before.panel}"]').click();document.querySelector('[data-prep-thread]').scrollTop=${before.threadTop}`)
 }
 async function check(name, expression) { assert.ok(await browser.evaluate(expression), name); console.log(`PASS ${name}`); passed++ }
 async function click(selector) { await browser.evaluate(`document.querySelector(${JSON.stringify(selector)}).focus();document.querySelector(${JSON.stringify(selector)}).click()`) }
@@ -36,11 +59,25 @@ try {
     let fixtureUuid=0;crypto.randomUUID ||= ()=>'fixture-'+(++fixtureUuid);
     document.body.innerHTML='<div id="app"><header class="aiq-navbar"><nav><a href="#/teach" class="nav-item">课堂教学</a></nav><div class="el-drawer__body"><div><a href="#/teach">课堂教学</a></div></div></header><main></main></div>';
     const base=document.createElement('style');base.textContent=${JSON.stringify(css)};document.head.append(base);
-    ${responsive}
+    ${responsive};
     window.__reply=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json'}});
     window.__sessions=[{id:'s1',title:'科学探究课',status:'completed',updatedAt:'2026-10-21T00:00:00Z'},{id:'s2',title:'第二个独立对话',status:'completed',updatedAt:'2026-10-21T00:00:00Z'}];
     window.__details={
-      s1:{session:__sessions[0],messages:[{id:'u1',role:'user',content:'<img src=x onerror="window.__xss=1">教材',attachmentIds:[],createdAt:'2026-10-21T00:00:00Z'},{id:'a1',role:'assistant',content:'请核对名单，再确认创建。',attachmentIds:[],createdAt:'2026-10-21T00:00:01Z'}],events:[{id:1,type:'reasoning',data:{text:'先读取材料，核对同名与学号。'}},{id:2,type:'tool-start',data:{name:'create_class',callId:'call1',input:{name:'三年一班'}}},{id:3,type:'tool-result',data:{name:'create_class',callId:'call1',output:{message:'等待确认 <img onerror=x>'}}}],attachments:[{id:'f1',name:'科学教案.docx',mime:'application/octet-stream',size:1024,kind:'artifact'}],proposals:[{id:'p1',tool:'create_class',description:'创建三年一班',version:'v1',status:'pending',payload:{name:'三年一班',members:[{name:'张三',studentNo:'001',gender:null,score:null}]},preview:{className:'三年一班',members:[{name:'张三',studentNo:'001',gender:null,score:null}]}}],activeRun:null},
+      s1:{session:__sessions[0],messages:[
+        {id:'u1',role:'user',runId:'r-class1',content:'<img src=x onerror="window.__xss=1">教材',attachmentIds:[],createdAt:'2026-10-21T00:00:00Z'},
+        {id:'a1',role:'assistant',runId:'r-class1',content:${JSON.stringify(lessonMarkdown)},attachmentIds:[],createdAt:'2026-10-21T00:00:30Z'},
+        {id:'u2',role:'user',runId:'r-class2',content:'再检查一次班级',attachmentIds:[],createdAt:'2026-10-21T00:01:00Z'},
+        {id:'a2',role:'assistant',runId:'r-class2',content:'第二轮总结：已检查班级。',attachmentIds:[],createdAt:'2026-10-21T00:01:10Z'}
+      ],events:[
+        {id:1,runId:'r-class1',type:'text',createdAt:'2026-10-21T00:00:01Z',data:{text:'我先核对班级名单。'}},
+        {id:2,runId:'r-class1',type:'reasoning',createdAt:'2026-10-21T00:00:02Z',data:{text:'先读取材料，核对同名与学号。'}},
+        {id:3,runId:'r-class1',type:'tool-start',createdAt:'2026-10-21T00:00:03Z',data:{name:'create_class',callId:'call1',input:{name:'三年一班'}}},
+        {id:4,runId:'r-class1',type:'tool-result',createdAt:'2026-10-21T00:00:04Z',data:{name:'create_class',callId:'call1',output:{message:'等待确认 <img onerror=x>'}}},
+        {id:5,runId:'r-class1',type:'text',createdAt:'2026-10-21T00:00:29Z',data:{text:${JSON.stringify(lessonMarkdown)}}},
+        {id:6,runId:'r-class2',type:'tool-start',createdAt:'2026-10-21T00:01:01Z',data:{name:'list_classes',callId:'call1',input:{}}},
+        {id:7,runId:'r-class2',type:'tool-result',createdAt:'2026-10-21T00:01:02Z',data:{name:'list_classes',callId:'call1',output:{message:'第二轮的班级结果'}}},
+        {id:8,runId:'r-class2',type:'text',createdAt:'2026-10-21T00:01:09Z',data:{text:'第二轮总结：已检查班级。'}}
+      ],attachments:[{id:'f1',runId:'r-class1',createdAt:'2026-10-21T00:00:28Z',name:'科学教案.docx',mime:'application/octet-stream',size:1024,kind:'artifact'}],proposals:[{id:'p1',tool:'create_class',description:'创建三年一班',version:'v1',status:'pending',payload:{name:'三年一班',members:[{name:'张三',studentNo:'001',gender:null,score:null}]},preview:{className:'三年一班',members:[{name:'张三',studentNo:'001',gender:null,score:null}]}}],activeRun:null},
       s2:{session:__sessions[1],messages:[],events:[],attachments:[],proposals:[],activeRun:null}
     };
     window.__skills=[];window.__requests=[];window.__uploadFailures=0;window.__uploadCount=0;window.__created=0;window.__confirmConflict=false;window.__deleteFailure=false;window.__skillFailure=false;window.__deferS1=false;
@@ -61,7 +98,7 @@ try {
       const parts=p.split('/');const match=parts[1]==='api'&&parts[2]==='prep'&&parts[3]==='sessions'?[p,parts[4],parts[5]]:null;
       if(match){const id=match[1],part=match[2],detail=__details[id];if(!detail)return __reply({error:{message:'对话不存在'}},404);
         if(part==='attachments'){if(__uploadFailures-- > 0)return __reply({error:{message:'网络断开，请重试'}},503);const a={id:'up'+(++__uploadCount),name:url.searchParams.get('filename'),size:body.size,mime:body.type,kind:'upload'};detail.attachments.push(a);return __reply({attachment:a});}
-        if(part==='messages'){detail.messages.push({id:'user'+__requests.length,role:'user',content:body.content,attachmentIds:body.attachmentIds,createdAt:new Date().toISOString()});detail.activeRun={id:'r1',status:'queued',createdAt:new Date().toISOString()};return __reply({runId:'r1',status:'queued'});}
+        if(part==='messages'){const id='user'+__requests.length;detail.messages.push({id,role:'user',runId:'r1',content:body.content,attachmentIds:body.attachmentIds,createdAt:new Date().toISOString()});detail.activeRun={id:'r1',messageId:id,status:'queued',createdAt:new Date().toISOString()};return __reply({runId:'r1',status:'queued'});}
         if(part==='cancel'){if(window.__deferCancel){detail.activeRun.status='cancelling';return new Promise(resolve=>{window.__finishCancel=()=>{detail.activeRun.status='cancelled';resolve(__reply({run:detail.activeRun}))}})}detail.activeRun.status='cancelled';return __reply({run:detail.activeRun});}
         if(part==='events'&&window.__eventPages?.length){const next=window.__eventPages.shift();detail.hasMore=next.hasMore;detail.events.push(...next.events);return __reply({...detail,events:next.events,hasMore:next.hasMore});}
         if(method==='DELETE'){if(__deleteFailure)return __reply({error:{message:'删除暂时失败'}},503);delete __details[id];__sessions=__sessions.filter(s=>s.id!==id);return __reply({ok:true});}
@@ -76,12 +113,29 @@ try {
   `)
   await browser.waitFor(`document.querySelector('[data-prep-title]')?.textContent==='科学探究课' && !document.querySelector('[data-prep-action=new]').disabled`)
   await check('untrusted conversation content is text rather than executable markup', `!window.__xss && !document.querySelector('[data-prep-thread] img') && document.querySelector('[data-prep-thread]').textContent.includes('<img src=x')`)
+  await check('assistant Markdown renders headings, lists, emphasis, tables, quotes and fenced code', `(()=>{const m=document.querySelector('[data-prep-message="a1"]');return m.querySelector('h2')?.textContent==='科学探究教案' && m.querySelector('strong')?.textContent==='核对名单' && m.querySelectorAll('ul li').length===2 && m.querySelector('blockquote')?.textContent.includes('独立思考') && m.querySelector('table th')?.textContent==='环节' && m.querySelector('pre code')?.textContent.includes('const sample')})()`)
+  await check('Markdown preserves safe links and keeps raw HTML and dangerous URLs inert', `(()=>{const m=document.querySelector('[data-prep-message="a1"]');return !window.__markdownXss && !m.querySelector('img,script,iframe,[onerror],[onclick]') && ![...m.querySelectorAll('a')].some(a=>/^(?:javascript|data|vbscript):/i.test(a.getAttribute('href')||'')) && [...m.querySelectorAll('a')].some(a=>a.getAttribute('href')==='https://example.edu/lesson') && m.textContent.includes('<img src=x')})()`)
   await check('actual reasoning is available as a collapsed disclosure', `document.querySelector('.prep-reasoning')?.textContent.includes('先读取材料') && !document.querySelector('.prep-reasoning').open`)
-  await check('tool results are grouped with their matching call and escaped', `document.querySelectorAll('[data-prep-events] details:not(.prep-reasoning)').length===1 && document.querySelector('[data-prep-events]').textContent.includes('<img onerror=x>') && !document.querySelector('[data-prep-events] img')`)
-  await check('generated files use an authenticated same-origin download route', `document.querySelector('.is-artifact').getAttribute('href')==='/api/prep/attachments/f1' && document.querySelector('.is-artifact').textContent.includes('科学教案.docx')`)
+  await check('work events render in their conversation run instead of the files panel', `document.querySelectorAll('[data-prep-thread] [data-prep-events]').length===2 && !document.querySelector('.prep-activity [data-prep-events]') && document.querySelector('[data-prep-panel="activity"]').textContent.includes('文件与确认')`)
+  await check('tool results are paired within their own run and escaped even when call ids repeat', `(()=>{const first=document.querySelector('[data-prep-run="r-class1"]'),second=document.querySelector('[data-prep-run="r-class2"]');return first.querySelectorAll('details:not(.prep-reasoning)').length===1 && first.textContent.includes('<img onerror=x>') && !first.querySelector('img') && !first.textContent.includes('第二轮的班级结果') && second.textContent.includes('第二轮的班级结果') && !second.textContent.includes('等待确认')})()`)
+  await check('completed runs retain intermediate updates without duplicating the final reply', `document.querySelector('[data-prep-run="r-class1"] [data-prep-progress]')?.textContent.includes('我先核对班级名单。') && document.querySelectorAll('[data-prep-thread] h2').length===1 && [...document.querySelectorAll('[data-prep-progress]')].every(e=>!e.textContent.includes('第二轮总结：')) && document.querySelectorAll('[data-prep-final]').length===2`)
+  await check('generated files have explicit private download controls in chat and the files index', `(()=>{const cards=[...document.querySelectorAll('[data-prep-artifact="f1"]')];return cards.some(e=>e.closest('[data-prep-thread]')) && cards.some(e=>e.closest('[data-prep-artifacts]')) && cards.every(e=>e.textContent.includes('科学教案.docx') && e.querySelector('a.is-artifact')?.getAttribute('href')==='/api/prep/attachments/f1' && e.querySelector('a.is-artifact').textContent.includes('下载'))})()`)
+  await check('user messages align to the right with their avatar after the message bubble', `(()=>{const u=document.querySelector('[data-prep-message="u1"]'),body=u.querySelector('.prep-message-body').getBoundingClientRect(),avatar=u.querySelector('.prep-message-avatar').getBoundingClientRect(),run=document.querySelector('[data-prep-run="r-class1"]');return body.right<=avatar.left && u.getBoundingClientRect().right>=run.getBoundingClientRect().right-1})()`)
+  await check('message input has a visible label and a persistent border', `(()=>{const input=document.querySelector('#prep-message'),style=getComputedStyle(input),label=document.querySelector('label[for="prep-message"]');return label && label.getBoundingClientRect().height>0 && getComputedStyle(label).position!=='absolute' && parseFloat(style.borderTopWidth)>=1 && style.borderTopStyle!=='none' && style.borderTopColor!=='rgba(0, 0, 0, 0)'})()`)
   await check('classroom-changing actions require an explicit confirmation control', `document.querySelector('[data-prep-confirm=p1]')?.textContent==='确认执行' && !__requests.some(r=>r.p.endsWith('/confirm'))`)
   await phoneShots('prep-conversation',{panel:'chat',scrollTo:'.prep-chat'})
-  await phoneShots('prep-reasoning-tools',{panel:'activity',scrollTo:'[data-prep-events]',openDetails:true})
+  await phoneShots('prep-reasoning-tools',{panel:'chat',scrollTo:'[data-prep-events]',openDetails:true})
+  await phoneShots('prep-markdown',{panel:'chat',scrollTo:'[data-prep-final="a1"]'})
+  await phoneShots('prep-markdown-table-code',{panel:'chat',scrollTo:'[data-prep-final="a1"] table'})
+  await phoneShots('prep-generated-file',{panel:'chat',scrollTo:'[data-prep-thread] [data-prep-artifact="f1"]'})
+  await phoneShots('prep-files-index',{panel:'activity',scrollTo:'[data-prep-artifacts]'})
+  if(output){
+    await browser.setViewport(1366,900,{mobile:false})
+    await browser.evaluate(`document.documentElement.classList.add('dark');document.querySelector('[data-prep-panel="chat"]').click();document.querySelector('[data-prep-final="a1"]').scrollIntoView({block:'start'});window.scrollTo(0,0)`)
+    await settleTransitions()
+    await browser.screenshot(output+'/prep-desktop-dark.png')
+    await browser.evaluate(`document.documentElement.classList.remove('dark')`)
+  }
 
   await click('[data-prep-edit=p1]')
   await browser.waitFor(`!!document.querySelector('.prep-modal[open]')`)
@@ -116,9 +170,13 @@ try {
   await browser.waitFor(`document.querySelector('[data-prep-run-status]').textContent==='排队中'`)
   await check('send includes selected attachment ids and clears only a successful draft', `__requests.findLast(r=>r.p.endsWith('/messages')).body.attachmentIds.length===3 && document.querySelector('#prep-message').value==='' && !document.querySelector('.prep-upload')`)
   await check('queued work disables duplicate sending and offers cancellation', `document.querySelector('[data-prep-send]').disabled && !document.querySelector('[data-prep-action=cancel]').hidden`)
-  await browser.evaluate(`__details.new1.activeRun.status='running';__details.new1.events=[{id:10,runId:'r1',type:'reasoning',data:{text:'已读取三份资料。'}},{id:11,runId:'r1',type:'text',data:{text:'我已整理出'}}];__prepTest.poll()`)
+  await browser.evaluate(`__details.new1.activeRun.status='running';__details.new1.events=[{id:10,runId:'r1',type:'reasoning',data:{text:'已读取三份资料。'}},{id:11,runId:'r1',type:'text',data:{text:'我已整理出'}},{id:12,runId:'r1',type:'text',data:{text:'第一版。'}},{id:13,runId:'r1',type:'tool-start',data:{name:'write',callId:'write1',input:{path:'lesson.md'}}},{id:14,runId:'r1',type:'tool-result',data:{name:'write',callId:'write1',output:{ok:true}}},{id:15,runId:'r1',type:'text',data:{text:'正在补充'}},{id:16,runId:'r1',type:'text',data:{text:'课堂活动。'}}];__prepTest.poll()`)
   await browser.waitFor(`document.querySelector('[data-prep-stream]')?.textContent.includes('我已整理出')`)
   await check('incremental provider events become reasoning and response content', `document.querySelector('[data-prep-events]').textContent.includes('已读取三份资料') && document.querySelector('[data-prep-run-status]').textContent==='正在备课'`)
+  await check('stream token deltas join continuously and work updates form separate paragraphs', `(()=>{const blocks=[...document.querySelectorAll('[data-prep-run="r1"] [data-prep-progress]')];return blocks.length===2 && blocks[0].textContent.trim()==='我已整理出第一版。' && blocks[1].textContent.trim()==='正在补充课堂活动。' && getComputedStyle(blocks[0]).display!=='inline' && blocks[0].getBoundingClientRect().bottom<blocks[1].getBoundingClientRect().top})()`)
+  await browser.evaluate(`document.querySelector('[data-prep-run="r1"] .prep-reasoning').open=true;__details.new1.events.push({id:17,runId:'r1',type:'text',data:{text:'即将完成。'}});void __prepTest.poll()`)
+  await browser.waitFor(`document.querySelector('[data-prep-run="r1"] [data-prep-progress]:last-of-type')?.textContent.includes('即将完成') || [...document.querySelectorAll('[data-prep-run="r1"] [data-prep-progress]')].some(e=>e.textContent.includes('即将完成'))`)
+  await check('live updates preserve the teacher opened reasoning disclosure', `document.querySelector('[data-prep-run="r1"] .prep-reasoning').open && [...document.querySelectorAll('[data-prep-progress]')].at(-1).textContent.trim()==='正在补充课堂活动。即将完成。'`)
   await browser.evaluate(`__deferCancel=true`)
   await click('[data-prep-action=cancel]')
   await browser.waitFor(`typeof __finishCancel==='function'`)
@@ -157,7 +215,7 @@ try {
 
   await browser.evaluate(`__details.s2.events=[{id:31,type:'status',data:{status:'completed',message:'第一页'}}];__details.s2.hasMore=true;__eventPages=[{events:[{id:32,type:'reasoning',data:{text:'第二页的真实推理'}}],hasMore:true},{events:[{id:33,type:'status',data:{status:'completed',message:'末页已同步'}}],hasMore:false}];void __prepTest.openSession('s2')`)
   await browser.waitFor(`document.querySelector('[data-prep-events]')?.textContent.includes('末页已同步')`)
-  await check('completed conversations drain all event pages without needing an active run', `document.querySelector('[data-prep-events]').textContent.includes('第二页的真实推理') && __requests.some(r=>r.p.endsWith('/s2/events')) && !__details.s2.hasMore`)
+  await check('completed conversations drain all event pages without needing an active run', `[...document.querySelectorAll('[data-prep-thread] [data-prep-events]')].some(e=>e.textContent.includes('第二页的真实推理')) && __requests.some(r=>r.p.endsWith('/s2/events')) && !__details.s2.hasMore`)
 
   await browser.evaluate(`void __prepTest.openSession('')`)
   await browser.waitFor(`!!document.querySelector('.prep-welcome')`)
@@ -171,11 +229,22 @@ try {
   await browser.waitFor(`!document.querySelector('[data-prep-action=new]').disabled`)
   await check('a prior account draft cannot reappear after switching back', `document.querySelector('#prep-message').value===''`)
 
+  await browser.evaluate(`void __prepTest.openSession('s1')`)
+  await browser.waitFor(`!!document.querySelector('[data-prep-final="a1"] table')`)
+
   for(const [width,height] of [[320,740],[390,844],[768,1024],[1366,768]]){
     await browser.setViewport(width,height,{mobile:width<1024})
     for(const theme of ['light','dark']){
       await browser.evaluate(`document.documentElement.classList.toggle('dark',${theme==='dark'})`)
+      await settleTransitions()
       await check(`preparation layout fits ${width}px ${theme}`, `document.documentElement.scrollWidth<=${width}+1 && document.querySelector('.prep-layout').getBoundingClientRect().right<=${width}+1 && [...document.querySelectorAll('.prep-chat :is(button,textarea)')].filter(e=>e.getClientRects().length).every(e=>e.getBoundingClientRect().right<=${width}+1)`)
+      await check(`Markdown and generated files remain bounded at ${width}px ${theme}`, `(()=>{const thread=document.querySelector('[data-prep-thread]').getBoundingClientRect();return [...document.querySelectorAll('[data-prep-thread] :is(table,pre,.prep-artifact-card)')].every(e=>e.getBoundingClientRect().right<=thread.right+1) && document.querySelector('[data-prep-thread] [data-prep-artifact="f1"] a.is-artifact').getBoundingClientRect().height>=44})()`)
+      await check(`download controls and Markdown links retain readable contrast at ${width}px ${theme}`, `(()=>{
+        const rgb=value=>(value.match(/[\\d.]+/g)||[]).map(Number);
+        const lum=rgb=>rgb.slice(0,3).map(v=>v/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4).reduce((sum,v,i)=>sum+v*[.2126,.7152,.0722][i],0);
+        function background(el){for(let p=el;p;p=p.parentElement){const c=rgb(getComputedStyle(p).backgroundColor);if(c.length===3||c[3]>=.99)return c}return [255,255,255]}
+        return [...document.querySelectorAll('a.is-artifact,.prep-heading>.prep-btn,[data-prep-action="skills"],.prep-markdown a')].every(el=>{const colors=[lum(rgb(getComputedStyle(el).color)),lum(background(el))].sort((a,b)=>b-a);return (colors[0]+.05)/(colors[1]+.05)>=4.5})
+      })()`)
     }
   }
   await browser.setViewport(390,844,{mobile:true})

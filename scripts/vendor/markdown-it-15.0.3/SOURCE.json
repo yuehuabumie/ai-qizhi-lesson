@@ -1,0 +1,12 @@
+{
+  "package": "markdown-it",
+  "version": "15.0.3",
+  "repository": "https://github.com/markdown-it/markdown-it",
+  "tarball": "https://registry.npmjs.org/markdown-it/-/markdown-it-15.0.3.tgz",
+  "integrity": "sha512-+Az7Ojz3iRGu8KYMvJ6xVhvrxP3eE+vEtJX75Ow88XBpcQNV/0lGX5ZynIIBftREo4DC2jsveAMDaeltmm8QvQ==",
+  "license": "MIT",
+  "files": {
+    "markdown-it.umd.min.js": "sha256-391f2aa638e75e6c7859d0a5c5650ef0956722a45998f17e05b83bc655778e1e",
+    "LICENSE": "sha256-792c48c5a849a15fdf9e37e8bcf9e6d1dd13b32b46c642a748a0a46a9919d473"
+  }
+}

@@ -5,9 +5,10 @@ import { readFileSync, existsSync, statSync, mkdirSync } from 'node:fs'
 import { resolve, extname, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { launch } from './lib/cdp-kit.mjs'
+import { prepBrowserSource } from './lib/prep-browser-source.mjs'
 
 const site = fileURLToPath(new URL('../site/', import.meta.url))
-const prep = readFileSync(new URL('./prep-studio.js', import.meta.url))
+const prep = prepBrowserSource()
 const sessions=[], details=new Map()
 let created=0, uploaded=0
 const server = createServer(async(req, res) => {

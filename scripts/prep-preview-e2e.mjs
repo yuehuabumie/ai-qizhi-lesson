@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync,mkdirSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { launch,sleep } from './lib/cdp-kit.mjs'
+import { prepBrowserSource } from './lib/prep-browser-source.mjs'
 const seen=[]
 const server=createServer((req,res)=>{seen.push(req.url);res.setHeader('content-type','text/html');res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><div id="app"><main></main></div>')})
 await new Promise(ok=>server.listen(0,'127.0.0.1',ok))
@@ -13,7 +14,7 @@ let p=false,c=false;try{parent.document.body.dataset.escaped='yes'}catch{p=true}
 document.body.dataset.parentBlocked=String(p);document.body.dataset.cookieBlocked=String(c);
 fetch('${base}/leak-fetch').catch(()=>{});
 </script>`
-const source=readFileSync(new URL('./prep-studio.js',import.meta.url),'utf8').replace('  boot().catch((e) =>','  Promise.resolve().catch((e) =>').replace(/\}\)\(\)\s*$/,`globalThis.__previewTest={mount(){mountPage({$el:null},'preview-session')}};})()`)
+const source=prepBrowserSource().replace('  boot().catch((e) =>','  Promise.resolve().catch((e) =>').replace(/\}\)\(\)\s*$/,`globalThis.__previewTest={mount(){mountPage({$el:null},'preview-session')}};})()`)
 const browser=await launch();let passed=0
 const frameSessions=new Map()
 const check=(name,value)=>{assert.ok(value,name);console.log('PASS '+name);passed++}
@@ -47,7 +48,7 @@ try{
     return new Response(JSON.stringify(data),{headers:{'content-type':'application/json'}})
   };${source};__previewTest.mount()`)
   await browser.waitFor(`!!document.querySelector('[data-prep-preview="html-fixture"]')`)
-  await browser.setViewport(320,740,{mobile:true});await click('[data-prep-panel="activity"]');await click('[data-prep-preview="html-fixture"]')
+  await browser.setViewport(320,740,{mobile:true});await click('[data-prep-panel="activity"]');await click('.prep-activity [data-prep-preview="html-fixture"]')
   await browser.waitFor(`!!document.querySelector('.prep-preview-frame')`)
   let evaluate;for(let i=0;i<50&&!evaluate;i++){evaluate=await child();if(!evaluate)await sleep(100)}
   assert.ok(evaluate,'The trusted wrapper must create the inner sandbox')
