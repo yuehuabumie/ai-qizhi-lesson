@@ -1,0 +1,16 @@
+[Unit]
+Description=Private transport between AI Qizhi API and prep worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+ExecStart=/usr/bin/ssh -NT -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=20 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=yes -i /home/ubuntu/.ssh/aiq-prep-worker -L 127.0.0.1:3331:127.0.0.1:3330 -R 127.0.0.1:3332:127.0.0.1:3020 ubuntu@82.156.157.199
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

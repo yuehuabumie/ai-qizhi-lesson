@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { Prisma } from '@prisma/client'
 import { z } from 'zod'
 import { prisma } from '../lib/db.js'
@@ -7,6 +7,8 @@ import { requireUser } from '../lib/auth.js'
 import { parseBody } from '../lib/validate.js'
 import { ApiError, badRequest, forbidden, notFound } from '../lib/errors.js'
 import { clientIp, enforce } from '../lib/rate-limit.js'
+import { memberInputSchema, memberPatchSchema, rosterOperationSchema, planRosterOperations, assertRoster, assertGroupPartition, rosterNameKey, type RosterMember, type RosterOperation } from '../lib/teaching-roster.js'
+import { quizDefinitionSchema, quizSubmitSchema, parseQuizDefinition, projectQuiz, gradeQuiz, parseQuizSubmission, studentQuizResult } from '../lib/teaching-quiz.js'
 import {
   ASSIGN_AI_LIMIT,
   assignTokenField,
@@ -77,9 +79,9 @@ const assignmentTitleField = z
   .min(1, '请填写作业名称')
   .max(120, '作业名称最多 120 字')
 
-const instructionsField = z.string().trim().max(1000, '作业说明最多 1000 字').default('')
+const instructionsField = z.string().trim().max(1000, '作业说明最多 1000 字')
 
-const assignTypeField = z.enum(['storybook', 'lab', 'task'], { message: '不支持的作业类型' }).default('storybook')
+const assignTypeField = z.enum(['storybook', 'lab', 'task', 'quiz'], { message: '不支持的作业类型' }).default('storybook')
 
 const labIdField = z
   .string({ message: '请选择互动练习' })
@@ -94,12 +96,14 @@ const assignmentBody = z
   .object({
     title: assignmentTitleField,
     type: assignTypeField,
-    instructions: instructionsField,
+    instructions: instructionsField.default(''),
     labId: labIdField.optional(),
     moduleId: moduleIdField.optional(),
     stage: stageField.optional(),
     activity: activityField.optional(),
     toolLabId: labIdField.optional(),
+    status: z.enum(['draft', 'open', 'closed']).default('open'),
+    quiz: quizDefinitionSchema.optional(),
   })
   .superRefine((v, ctx) => {
     if (v.type === 'lab' && !v.labId) {
@@ -108,6 +112,8 @@ const assignmentBody = z
     if (v.type === 'task' && (!v.moduleId || !v.stage || !v.activity)) {
       ctx.addIssue({ code: 'custom', path: ['activity'], message: '请选择课程任务' })
     }
+    if (v.type === 'quiz' && !v.quiz) ctx.addIssue({ code: 'custom', path: ['quiz'], message: '请填写试卷题目' })
+    if (v.type !== 'quiz' && v.quiz) ctx.addIssue({ code: 'custom', path: ['quiz'], message: '当前作业类型不支持试卷' })
   })
 
 const dataImage = z
@@ -365,9 +371,9 @@ function assertNoPublished(submissions: DeletingSubmission[], message: string): 
   if (submissions.some((s) => s.work?.published)) throw forbidden(message)
 }
 
-async function deleteSubmissionWorks(submissions: DeletingSubmission[]): Promise<void> {
+async function deleteSubmissionWorks(submissions: DeletingSubmission[], db: Pick<Prisma.TransactionClient, 'work'> = prisma): Promise<void> {
   const ids = submissions.map((s) => s.work?.id).filter((id): id is string => !!id)
-  if (ids.length) await prisma.work.deleteMany({ where: { id: { in: ids } } })
+  if (ids.length) await db.work.deleteMany({ where: { id: { in: ids } } })
 }
 
 const submissionSelect = {
@@ -375,6 +381,48 @@ const submissionSelect = {
   assignment: { select: { type: true } },
   work: { select: { id: true, images: true, published: true } },
 } satisfies Prisma.SubmissionSelect
+
+const memberSelect = { id: true, name: true, studentNo: true, gender: true, score: true } as const
+
+async function lockRoster(tx: Prisma.TransactionClient, ownerId: string, classId: string) {
+  const locked = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM classrooms WHERE id = ${classId} AND ownerId = ${ownerId} FOR UPDATE`
+  if (!locked.length) throw notFound('班级不存在或已被删除')
+}
+
+async function mutateRoster(ownerId: string, classId: string, build: (members: RosterMember[]) => RosterOperation[]) {
+  try {
+    const result = await prisma.$transaction(async tx => {
+      await lockRoster(tx, ownerId, classId)
+      const current = await tx.classMember.findMany({ where: { classId }, select: memberSelect })
+      const operations = build(current)
+      const planned = planRosterOperations(current, operations)
+      const removedSubmissions = planned.removed.length ? await tx.submission.findMany({ where: { memberId: { in: planned.removed } }, select: submissionSelect }) : []
+      assertNoPublished(removedSubmissions, '待删除学生还有已发布到展厅的作品，请先撤下')
+      const files = collectFiles(removedSubmissions)
+      await deleteSubmissionWorks(removedSubmissions, tx)
+      if (planned.removed.length) await tx.classMember.deleteMany({ where: { classId, id: { in: planned.removed } } })
+      const updates = operations.filter(op => op.action === 'update').map(op => op.id!)
+      // Clear changed unique keys inside the same transaction to support valid student-number swaps.
+      if (updates.length) await tx.classMember.updateMany({ where: { classId, id: { in: updates } }, data: { studentNo: null } })
+      for (const member of planned.members) {
+        const data = { name: member.name, studentNo: member.studentNo, gender: member.gender, score: member.score }
+        if (member.id.startsWith('new:')) await tx.classMember.create({ data: { classId, ...data } })
+        else if (updates.includes(member.id)) await tx.classMember.update({ where: { id: member.id }, data })
+      }
+      return {
+        added: operations.filter(op => op.action === 'add').length,
+        updated: updates.length, deleted: planned.removed.length, files,
+        members: await tx.classMember.findMany({ where: { classId }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], select: memberSelect }),
+      }
+    })
+    await removeWorkImages(result.files)
+    const { files: _files, ...response } = result
+    return response
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') throw badRequest('名单中的学号重复，请检查后重试')
+    throw err
+  }
+}
 
 export async function classesRoutes(app: FastifyInstance) {
   // ── 班级 ───────────────────────────────────────────────────
@@ -406,17 +454,20 @@ export async function classesRoutes(app: FastifyInstance) {
   app.post('/classes', async (req) => {
     const me = await requireUser(req)
     await enforce([{ key: `classes:user:${me.id}`, limit: 60, windowMs: 60 * 60 * 1000 }], '班级操作太频繁')
-    const body = parseBody(z.object({ name: classNameField }), req.body)
-
-    const count = await prisma.classroom.count({ where: { ownerId: me.id } })
-    if (count >= MAX_CLASSES) throw badRequest(`最多创建 ${MAX_CLASSES} 个班级`)
+    const body = parseBody(z.object({ name: classNameField, members: z.array(memberInputSchema).max(MAX_MEMBERS).optional() }), req.body)
+    assertRoster(body.members ?? [])
 
     try {
-      const cls = await prisma.classroom.create({
-        data: { ownerId: me.id, name: body.name },
-        select: { id: true, name: true, createdAt: true },
+      const cls = await prisma.$transaction(async tx => {
+        await tx.$queryRaw`SELECT id FROM users WHERE id = ${me.id} FOR UPDATE`
+        const count = await tx.classroom.count({ where: { ownerId: me.id } })
+        if (count >= MAX_CLASSES) throw badRequest(`最多创建 ${MAX_CLASSES} 个班级`)
+        return tx.classroom.create({
+          data: { ownerId: me.id, name: body.name, ...(body.members?.length ? { members: { create: body.members } } : {}) },
+          select: { id: true, name: true, createdAt: true, members: { select: memberSelect } },
+        })
       })
-      return { class: { id: cls.id, name: cls.name, createdAt: cls.createdAt.toISOString() } }
+      return { class: { id: cls.id, name: cls.name, createdAt: cls.createdAt.toISOString(), members: cls.members } }
     } catch (err) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
         throw badRequest('已经有同名班级了')
@@ -435,7 +486,7 @@ export async function classesRoutes(app: FastifyInstance) {
         name: true,
         createdAt: true,
         updatedAt: true,
-        members: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], select: { id: true, name: true, createdAt: true } },
+        members: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], select: memberSelect },
         assignments: {
           orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
           select: {
@@ -449,6 +500,8 @@ export async function classesRoutes(app: FastifyInstance) {
             stage: true,
             activity: true,
             toolLabId: true,
+            scoresPublished: true,
+            answersPublished: true,
             createdAt: true,
             _count: { select: { submissions: { where: { status: 'submitted' } } } },
           },
@@ -464,7 +517,7 @@ export async function classesRoutes(app: FastifyInstance) {
         createdAt: cls.createdAt.toISOString(),
         updatedAt: cls.updatedAt.toISOString(),
         memberCount: cls.members.length,
-        members: cls.members.map((m) => ({ id: m.id, name: m.name })),
+        members: cls.members,
         assignments: cls.assignments.map((a) => ({
           id: a.id,
           title: a.title,
@@ -477,6 +530,8 @@ export async function classesRoutes(app: FastifyInstance) {
           stage: a.stage,
           activity: a.activity,
           toolLabId: a.toolLabId,
+          scoresPublished: a.scoresPublished,
+          answersPublished: a.answersPublished,
           toolLabTitle: labById(a.toolLabId)?.title ?? null,
           submitted: a._count.submissions,
           total: cls.members.length,
@@ -530,20 +585,20 @@ export async function classesRoutes(app: FastifyInstance) {
     const id = parseBody(idField, (req.params as { id?: string }).id)
     await ownedClass(me.id, id)
     const body = parseBody(
-      z.object({ names: z.array(memberNameField).min(1, '请至少填写一个姓名').max(MAX_MEMBERS, `一次最多导入 ${MAX_MEMBERS} 人`) }),
+      z.object({
+        names: z.array(memberNameField).min(1).max(MAX_MEMBERS).optional(),
+        members: z.array(memberInputSchema).min(1).max(MAX_MEMBERS).optional(),
+      }).refine(v => !!v.names !== !!v.members, '请填写 names 或 members 中的一项'),
       req.body,
     )
 
-    const names = [...new Set(body.names)]
-    const existing = await prisma.classMember.count({ where: { classId: id } })
-    if (existing + names.length > MAX_MEMBERS) {
-      throw badRequest(`一个班级最多 ${MAX_MEMBERS} 人，当前已有 ${existing} 人`)
-    }
-    const result = await prisma.classMember.createMany({
-      data: names.map((name) => ({ classId: id, name })),
-      skipDuplicates: true,
+    const names = [...new Set(body.names ?? [])]
+    const result = await mutateRoster(me.id, id, current => {
+      if (body.members) return body.members.map(m => ({ action: 'add' as const, ...m }))
+      const known = new Set(current.map(m => rosterNameKey(m.name)))
+      return names.filter(name => !known.has(rosterNameKey(name))).map(name => ({ action: 'add' as const, name }))
     })
-    return { added: result.count, skipped: names.length - result.count }
+    return { ...result, skipped: (body.members?.length ?? names.length) - result.added }
   })
 
   app.patch('/classes/:id/members/:memberId', async (req) => {
@@ -551,25 +606,9 @@ export async function classesRoutes(app: FastifyInstance) {
     const id = parseBody(idField, (req.params as { id?: string }).id)
     const memberId = parseBody(idField, (req.params as { memberId?: string }).memberId)
     await ownedClass(me.id, id)
-    const member = await prisma.classMember.findFirst({
-      where: { id: memberId, classId: id },
-      select: { id: true },
-    })
-    if (!member) throw notFound('成员不存在或已被删除')
-    const body = parseBody(z.object({ name: memberNameField }), req.body)
-    try {
-      const updated = await prisma.classMember.update({
-        where: { id: memberId },
-        data: { name: body.name },
-        select: { id: true, name: true },
-      })
-      return { member: updated }
-    } catch (err) {
-      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-        throw badRequest('名单里已经有同名成员了')
-      }
-      throw err
-    }
+    const body = parseBody(memberPatchSchema, req.body)
+    const result = await mutateRoster(me.id, id, () => [{ action: 'update', id: memberId, ...body }])
+    return { member: result.members.find(m => m.id === memberId) }
   })
 
   app.delete('/classes/:id/members/:memberId', async (req) => {
@@ -577,27 +616,54 @@ export async function classesRoutes(app: FastifyInstance) {
     const id = parseBody(idField, (req.params as { id?: string }).id)
     const memberId = parseBody(idField, (req.params as { memberId?: string }).memberId)
     await ownedClass(me.id, id)
-    const member = await prisma.classMember.findFirst({
-      where: { id: memberId, classId: id },
-      select: { id: true },
-    })
-    if (!member) throw notFound('成员不存在或已被删除')
-
-    const submissions = await prisma.submission.findMany({
-      where: { memberId },
-      select: submissionSelect,
-    })
-    assertNoPublished(submissions, '这名学生还有已发布到展厅的作品，请先撤下')
-    const files = collectFiles(submissions)
-
-    await deleteSubmissionWorks(submissions)
-    await prisma.classMember.delete({ where: { id: memberId } })
-    await removeWorkImages(files)
+    await mutateRoster(me.id, id, () => [{ action: 'delete', id: memberId }])
     return { ok: true, id: memberId }
   })
 
+  app.post('/classes/:id/members/batch', async req => {
+    const me = await requireUser(req)
+    const id = parseBody(idField, (req.params as { id?: string }).id)
+    await ownedClass(me.id, id)
+    const body = parseBody(z.object({ operations: z.array(rosterOperationSchema).min(1).max(MAX_MEMBERS * 2) }), req.body)
+    return mutateRoster(me.id, id, () => body.operations)
+  })
+
+  app.get('/classes/:id/groups', async req => {
+    const me = await requireUser(req)
+    const id = parseBody(idField, (req.params as { id?: string }).id)
+    await ownedClass(me.id, id)
+    const groups = await prisma.classGroup.findMany({
+      where: { classId: id }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      select: { id: true, name: true, members: { select: { member: { select: memberSelect } } } },
+    })
+    return { groups: groups.map(g => ({ id: g.id, name: g.name, members: g.members.map(m => m.member) })) }
+  })
+
+  app.put('/classes/:id/groups', async req => {
+    const me = await requireUser(req)
+    const id = parseBody(idField, (req.params as { id?: string }).id)
+    await ownedClass(me.id, id)
+    const body = parseBody(z.object({ groups: z.array(z.object({ name: classNameField, memberIds: z.array(idField).min(1).max(MAX_MEMBERS) })).max(MAX_MEMBERS) }), req.body)
+    try {
+      await prisma.$transaction(async tx => {
+        await lockRoster(tx, me.id, id)
+        const members = await tx.classMember.findMany({ where: { classId: id }, select: { id: true } })
+        assertGroupPartition(members.map(m => m.id), body.groups)
+        await tx.classGroup.deleteMany({ where: { classId: id } })
+        for (const group of body.groups) {
+          await tx.classGroup.create({ data: { classId: id, name: group.name, members: { create: group.memberIds.map(memberId => ({ memberId })) } } })
+        }
+      })
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') throw badRequest('小组名称重复，请检查后重试')
+      throw err
+    }
+    const groups = await prisma.classGroup.findMany({ where: { classId: id }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], select: { id: true, name: true, members: { select: { member: { select: memberSelect } } } } })
+    return { groups: groups.map(g => ({ id: g.id, name: g.name, members: g.members.map(m => m.member) })) }
+  })
+
   // ── 作业 ───────────────────────────────────────────────────
-  app.post('/classes/:id/assignments', async (req) => {
+  app.post('/classes/:id/assignments', { bodyLimit: 1024 * 1024 }, async (req) => {
     const me = await requireUser(req)
     const id = parseBody(idField, (req.params as { id?: string }).id)
     await ownedClass(me.id, id)
@@ -619,6 +685,8 @@ export async function classesRoutes(app: FastifyInstance) {
         stage: body.type === 'task' ? body.stage! : null,
         activity: body.type === 'task' ? body.activity! : null,
         toolLabId: body.type === 'task' ? body.toolLabId ?? null : null,
+        quizJson: body.type === 'quiz' ? JSON.stringify(body.quiz!) : null,
+        status: body.status,
         token,
       },
       select: {
@@ -632,6 +700,9 @@ export async function classesRoutes(app: FastifyInstance) {
         stage: true,
         activity: true,
         toolLabId: true,
+        quizJson: true,
+        scoresPublished: true,
+        answersPublished: true,
         token: true,
         createdAt: true,
       },
@@ -639,6 +710,8 @@ export async function classesRoutes(app: FastifyInstance) {
     return {
       assignment: {
         ...assignment,
+        quizJson: undefined,
+        ...(assignment.type === 'quiz' ? { quiz: projectQuiz(body.quiz!, true) } : {}),
         createdAt: assignment.createdAt.toISOString(),
         link: `/assign/${assignment.token}`,
       },
@@ -664,6 +737,9 @@ export async function classesRoutes(app: FastifyInstance) {
         stage: true,
         activity: true,
         toolLabId: true,
+        quizJson: true,
+        scoresPublished: true,
+        answersPublished: true,
         token: true,
         createdAt: true,
         updatedAt: true,
@@ -687,7 +763,7 @@ export async function classesRoutes(app: FastifyInstance) {
     const members = await prisma.classMember.findMany({
       where: { classId: id },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-      select: { id: true, name: true },
+      select: memberSelect,
     })
     const byMember = new Map(assignment.submissions.map((s) => [s.memberId, s]))
 
@@ -697,6 +773,8 @@ export async function classesRoutes(app: FastifyInstance) {
       return {
         id: m.id,
         name: m.name,
+        studentNo: m.studentNo,
+        gender: m.gender,
         submissionId: s?.id ?? null,
         status: s ? s.status : 'not_started',
         submittedAt: s?.submittedAt ? s.submittedAt.toISOString() : null,
@@ -730,6 +808,10 @@ export async function classesRoutes(app: FastifyInstance) {
         stage: assignment.stage,
         activity: assignment.activity,
         toolLabId: assignment.toolLabId,
+        ...(assignment.type === 'quiz' && parseQuizDefinition(assignment.quizJson)
+          ? { quiz: projectQuiz(parseQuizDefinition(assignment.quizJson)!, true) } : {}),
+        scoresPublished: assignment.scoresPublished,
+        answersPublished: assignment.answersPublished,
         toolLabTitle: labById(assignment.toolLabId)?.title ?? null,
         token: assignment.token,
         link: `/assign/${assignment.token}`,
@@ -742,7 +824,7 @@ export async function classesRoutes(app: FastifyInstance) {
     }
   })
 
-  app.patch('/classes/:id/assignments/:assignmentId', async (req) => {
+  app.patch('/classes/:id/assignments/:assignmentId', { bodyLimit: 1024 * 1024 }, async (req) => {
     const me = await requireUser(req)
     const id = parseBody(idField, (req.params as { id?: string }).id)
     const assignmentId = parseBody(idField, (req.params as { assignmentId?: string }).assignmentId)
@@ -752,25 +834,36 @@ export async function classesRoutes(app: FastifyInstance) {
         title: assignmentTitleField.optional(),
         instructions: instructionsField.optional(),
         status: z.enum(['open', 'closed'], { message: '作业状态不正确' }).optional(),
+        quiz: quizDefinitionSchema.optional(),
+        scoresPublished: z.boolean().optional(),
+        answersPublished: z.boolean().optional(),
       }),
       req.body,
     )
     const existing = await prisma.assignment.findFirst({
       where: { id: assignmentId, classId: id },
-      select: { id: true },
+      select: { id: true, type: true, status: true },
     })
     if (!existing) throw notFound('作业不存在或已被删除')
 
-    const assignment = await prisma.assignment.update({
-      where: { id: assignmentId },
-      data: {
+    if (existing.type !== 'quiz' && (body.quiz !== undefined || body.scoresPublished !== undefined || body.answersPublished !== undefined)) throw badRequest('只有试卷作业支持题目与成绩公布设置')
+    if (body.quiz && existing.status !== 'draft') throw forbidden('试卷发布后不能修改题目，请另建一份试卷')
+
+    const assignment = await prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM assignments WHERE id = ${assignmentId} FOR UPDATE`
+      const current = await tx.assignment.findUnique({ where: { id: assignmentId }, select: { status: true } })
+      if (!current) throw notFound('作业不存在或已被删除')
+      if (body.quiz && current.status !== 'draft') throw forbidden('试卷发布后不能修改题目，请另建一份试卷')
+      return tx.assignment.update({ where: { id: assignmentId }, data: {
         ...(body.title !== undefined ? { title: body.title } : {}),
         ...(body.instructions !== undefined ? { instructions: body.instructions } : {}),
         ...(body.status !== undefined ? { status: body.status } : {}),
-      },
-      select: { id: true, title: true, instructions: true, status: true },
+        ...(body.quiz ? { quizJson: JSON.stringify(body.quiz) } : {}),
+        ...(body.scoresPublished !== undefined ? { scoresPublished: body.scoresPublished } : {}),
+        ...(body.answersPublished !== undefined ? { answersPublished: body.answersPublished } : {}),
+      }, select: { id: true, title: true, instructions: true, status: true, scoresPublished: true, answersPublished: true, quizJson: true } })
     })
-    return { assignment }
+    return { assignment: { ...assignment, quizJson: undefined, ...(parseQuizDefinition(assignment.quizJson) ? { quiz: projectQuiz(parseQuizDefinition(assignment.quizJson)!, true) } : {}) } }
   })
 
   app.post('/classes/:id/assignments/:assignmentId/rotate-link', async (req) => {
@@ -833,7 +926,7 @@ export async function classesRoutes(app: FastifyInstance) {
         submittedAt: true,
         aiCalls: true,
         score: true,
-        member: { select: { id: true, name: true } },
+        member: { select: { id: true, name: true, studentNo: true } },
         assignment: {
           select: {
             id: true,
@@ -843,6 +936,7 @@ export async function classesRoutes(app: FastifyInstance) {
             moduleId: true,
             stage: true,
             activity: true,
+            quizJson: true,
             classroom: { select: { name: true } },
           },
         },
@@ -863,6 +957,7 @@ export async function classesRoutes(app: FastifyInstance) {
         score: sub.score,
         type: sub.assignment.type,
         memberName: sub.member.name,
+        studentNo: sub.member.studentNo,
         assignmentTitle: sub.assignment.title,
         className: sub.assignment.classroom.name,
         labId: sub.assignment.labId,
@@ -874,6 +969,10 @@ export async function classesRoutes(app: FastifyInstance) {
         pages: storybook?.pages ?? [],
         lab: labContent,
         task: taskContent,
+        ...(sub.assignment.type === 'quiz' && parseQuizDefinition(sub.assignment.quizJson) ? { quiz: {
+          ...projectQuiz(parseQuizDefinition(sub.assignment.quizJson)!, true),
+          answers: parseQuizSubmission(sub.content)?.answers ?? [], score: sub.score,
+        } } : {}),
         work: sub.work
           ? {
               id: sub.work.id,
@@ -919,6 +1018,7 @@ export async function classesRoutes(app: FastifyInstance) {
     })
     if (!sub) throw notFound('提交记录不存在或已被删除')
     if (sub.status !== 'submitted') throw badRequest('这名学生还没有提交作业')
+    if (sub.assignment.type === 'quiz') throw forbidden('试卷提交不能发布到成果展厅')
 
     const author = cleanAuthor(body.author || defaultAuthor(sub.assignment.classroom.name, sub.member.name))
     if (!author) throw badRequest('请填写展厅署名')
@@ -1105,6 +1205,7 @@ export async function classesRoutes(app: FastifyInstance) {
       },
     })
     if (!sub) throw notFound('提交记录不存在或已被删除')
+    if (sub.assignment.type === 'quiz') throw forbidden('试卷只允许提交一次，不支持重置后重做')
     if (sub.work?.published) throw forbidden('请先把展厅里的作品撤下，再重置学生提交')
 
     const files = [
@@ -1134,6 +1235,9 @@ export async function classesRoutes(app: FastifyInstance) {
         stage: true,
         activity: true,
         toolLabId: true,
+        quizJson: true,
+        scoresPublished: true,
+        answersPublished: true,
         status: true,
         classroom: {
           select: { name: true, owner: { select: { nickname: true } } },
@@ -1145,6 +1249,8 @@ export async function classesRoutes(app: FastifyInstance) {
       assignment: {
         title: assignment.title,
         type: assignment.type,
+        ...(assignment.type === 'quiz' && assignment.status !== 'draft' && parseQuizDefinition(assignment.quizJson)
+          ? { quiz: projectQuiz(parseQuizDefinition(assignment.quizJson)!) } : {}),
         instructions: assignment.instructions,
         labId: assignment.labId,
         labTitle: labById(assignment.labId)?.title ?? null,
@@ -1156,12 +1262,13 @@ export async function classesRoutes(app: FastifyInstance) {
         status: assignment.status,
         className: assignment.classroom.name,
         teacherName: assignment.classroom.owner.nickname,
+        ...(assignment.type === 'quiz' ? { scoresPublished: assignment.scoresPublished, answersPublished: assignment.answersPublished } : {}),
         aiLimit: ASSIGN_AI_LIMIT,
       },
     }
   })
 
-  app.get('/assign/:token/me', async (req) => {
+  const studentSession = async (req: FastifyRequest) => {
     const token = parseBody(tokenField, (req.params as { token?: string }).token)
     const session = await optionalAssignment(req)
     if (!session || session.assignment.token !== token) return { member: null }
@@ -1178,7 +1285,7 @@ export async function classesRoutes(app: FastifyInstance) {
           ? parseTaskContent(raw)
           : parseContent(raw)
     return {
-      member: { id: session.member.id, name: session.member.name },
+      member: { id: session.member.id, name: session.member.name, studentNo: session.member.studentNo },
       submission: {
         type: session.assignment.type,
         status: session.submission.status,
@@ -1186,13 +1293,14 @@ export async function classesRoutes(app: FastifyInstance) {
           ? session.submission.submittedAt.toISOString()
           : null,
         aiCalls: session.submission.aiCalls,
-        score: session.submission.score,
+        ...(session.assignment.type === 'quiz' ? studentQuizResult(session.assignment, session.submission) : { score: session.submission.score, content }),
         aiLimit: ASSIGN_AI_LIMIT,
         published: !!work?.published,
-        content,
       },
     }
-  })
+  }
+  app.get('/assign/:token/me', studentSession)
+  app.get('/assign/:token/session', studentSession)
 
   app.post('/assign/:token/verify', async (req, reply) => {
     const token = parseBody(tokenField, (req.params as { token?: string }).token)
@@ -1203,19 +1311,26 @@ export async function classesRoutes(app: FastifyInstance) {
       ],
       '尝试次数太多，请稍后再试',
     )
-    const body = parseBody(z.object({ name: memberNameField }), req.body)
+    const body = parseBody(z.object({ name: memberNameField, studentNo: z.string().trim().max(40).optional() }), req.body)
     const assignment = await prisma.assignment.findUnique({
       where: { token },
-      select: { id: true, classId: true, type: true, status: true },
+      select: { id: true, classId: true, type: true, status: true, quizJson: true, scoresPublished: true, answersPublished: true },
     })
     if (!assignment) throw notFound('作业链接不存在或已失效')
-    if (assignment.status !== 'open') throw forbidden('这份作业已关闭，暂时不能开始')
-
-    const member = await prisma.classMember.findUnique({
-      where: { classId_name: { classId: assignment.classId, name: body.name } },
-      select: { id: true, name: true },
+    if (assignment.status === 'draft') throw forbidden('这份作业尚未发布')
+    const matches = await prisma.classMember.findMany({
+      where: { classId: assignment.classId, name: body.name },
+      select: { id: true, name: true, studentNo: true },
     })
+    const candidates = matches.filter(m => rosterNameKey(m.name) === rosterNameKey(body.name))
+    if (candidates.length > 1 && !body.studentNo) throw forbidden('存在同名学生，请填写老师名单中的学号')
+    const member = body.studentNo ? candidates.find(m => m.studentNo === body.studentNo) : candidates[0]
     if (!member) throw forbidden('姓名不在班级名单中，请检查后重试')
+
+    if (assignment.status !== 'open') {
+      const previous = await prisma.submission.findUnique({ where: { assignmentId_memberId: { assignmentId: assignment.id, memberId: member.id } }, select: { status: true } })
+      if (assignment.type !== 'quiz' || previous?.status !== 'submitted') throw forbidden('这份作业已关闭，暂时不能开始')
+    }
 
     const submission = await prisma.submission.upsert({
       where: { assignmentId_memberId: { assignmentId: assignment.id, memberId: member.id } },
@@ -1239,16 +1354,15 @@ export async function classesRoutes(app: FastifyInstance) {
     const content =
       assignment.type === 'lab' ? parseLabContent(raw) : assignment.type === 'task' ? parseTaskContent(raw) : parseContent(raw)
     return {
-      member: { id: member.id, name: member.name },
+      member: { id: member.id, name: member.name, studentNo: member.studentNo },
       submission: {
         type: assignment.type,
         status: submission.status,
         submittedAt: submission.submittedAt ? submission.submittedAt.toISOString() : null,
         aiCalls: submission.aiCalls,
-        score: submission.score,
+        ...(assignment.type === 'quiz' ? studentQuizResult(assignment, submission) : { score: submission.score, content }),
         aiLimit: ASSIGN_AI_LIMIT,
         published: !!work?.published,
-        content,
       },
     }
   })
@@ -1269,7 +1383,7 @@ export async function classesRoutes(app: FastifyInstance) {
 
       const current = await prisma.submission.findUnique({
         where: { id: session.submission.id },
-        select: { id: true, content: true, work: { select: { id: true } } },
+        select: { id: true, status: true, content: true, work: { select: { id: true } } },
       })
       if (!current) throw notFound('提交记录不存在，请重新打开作业链接')
       if (current.work) throw forbidden('老师已经处理过这份作业，暂时不能再修改')
@@ -1283,6 +1397,26 @@ export async function classesRoutes(app: FastifyInstance) {
       )
 
       const type = session.assignment.type
+      if (type === 'quiz') {
+        const body = parseBody(quizSubmitSchema, req.body)
+        const submittedAt = new Date()
+        await prisma.$transaction(async tx => {
+          // Serialize against teacher closing/publishing and concurrent student submissions.
+          await tx.$queryRaw`SELECT id FROM assignments WHERE id = ${session.assignment.id} FOR UPDATE`
+          const assignment = await tx.assignment.findUnique({ where: { id: session.assignment.id }, select: { status: true, token: true, quizJson: true } })
+          if (!assignment || assignment.token !== token) throw forbidden('作业链接已失效，请重新打开老师发的链接')
+          if (assignment.status !== 'open') throw forbidden('这份作业已关闭，暂时不能提交')
+          const quiz = parseQuizDefinition(assignment.quizJson)
+          if (!quiz) throw badRequest('试卷内容不完整，请联系老师')
+          const graded = gradeQuiz(quiz, body.answers)
+          const result = await tx.submission.updateMany({
+            where: { id: current.id, status: 'started' },
+            data: { status: 'submitted', content: JSON.stringify(graded), score: graded.score, submittedAt },
+          })
+          if (result.count !== 1) throw forbidden('试卷已提交，不能重复提交或修改')
+        })
+        return { ok: true, submission: { type: 'quiz', status: 'submitted', submittedAt: submittedAt.toISOString() } }
+      }
       const prefix = `${current.id}-${Date.now().toString(36)}`
       const previousImages = submissionImages(type, current.content)
       let content: StoredContent | StoredLabContent | StoredTaskContent

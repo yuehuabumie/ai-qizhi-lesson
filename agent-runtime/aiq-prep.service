@@ -1,0 +1,26 @@
+[Unit]
+Description=AI Qizhi isolated lesson preparation broker
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/aiq-prep/runtime.env
+EnvironmentFile=/etc/aiq-prep/broker.env
+WorkingDirectory=/opt/aiq-prep
+ExecStartPre=/bin/sh /opt/aiq-prep/setup-network.sh
+ExecStart=/usr/bin/node /opt/aiq-prep/broker.mjs
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=50
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/aiq-prep /run/docker.sock -/run/xtables.lock
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

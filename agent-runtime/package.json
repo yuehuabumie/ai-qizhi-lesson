@@ -1,0 +1,12 @@
+{
+  "name": "aiq-prep-runtime",
+  "private": true,
+  "type": "module",
+  "version": "1.0.0",
+  "engines": { "node": ">=24" },
+  "scripts": { "start": "node broker.mjs", "test": "node --test tests/*.test.mjs" },
+  "dependencies": {
+    "@deepseek-ai/dsh-sdk-client": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-tools": "0.2.1-rc.2"
+  }
+}

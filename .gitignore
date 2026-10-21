@@ -7,3 +7,4 @@ prisma/migrations/dev.db*
 .DS_Store
 site/uploads/
 site-*/
+.data/

@@ -224,6 +224,8 @@
       assignStatus: 'loading', // loading | gate | editor | lab | task | submitted | closed | error
       assignError: '',
       assignName: '',
+      assignStudentNo: '',
+      assignQuizAnswers: {},
       assignBusy: false,
       assignLoaded: false,
       // 互动练习作业：监考条捕获的本次成绩与作品
@@ -250,7 +252,7 @@
   const poemName = () => state.customPoemName || poem().name
   const isAssign = () => state.mode === 'assign'
 
-  const ASSIGN_TYPE_TEXT = { storybook: 'AI 绘本创作', lab: '互动练习', task: '课程任务' }
+  const ASSIGN_TYPE_TEXT = { storybook: 'AI 绘本创作', lab: '互动练习', task: '课程任务', quiz: '试卷' }
   const ASSIGN_STAGE_TEXT = { low: '低年级', mid: '中年级', high: '高年级' }
   const assignKind = () => (state.assignMeta && state.assignMeta.type) || 'storybook'
 
@@ -1714,6 +1716,7 @@
 
   function assignSubmittedHtml() {
     const kind = assignKind()
+    if (kind === 'quiz') return assignQuizSubmittedHtml()
     if (kind === 'lab') return assignLabSubmittedHtml()
     if (kind === 'task') return assignTaskSubmittedHtml()
     return assignStorybookSubmittedHtml()
@@ -1747,7 +1750,7 @@
         <div class="sbk-assign-badge">${svgIcon('notebook')}</div>
         <span class="sbk-assign-class">${esc(meta.className || '班级作业')}</span>
         <h1>${esc(meta.title || '作业')}</h1>
-        <p>这份作业已经关闭，暂时不能开始或提交。请等老师重新开放，或向老师确认。</p>
+        <p>${meta.status === 'draft' ? '这份作业尚未发布，请等老师发布后再开始。' : '这份作业已经关闭，暂时不能开始或提交。请等老师重新开放，或向老师确认。'}</p>
         <button type="button" class="sbk-btn" data-act="assign-retry">重新检查</button>
       </div>
     </div>`
@@ -1764,7 +1767,9 @@
           ? `<span class="sbk-assign-tag">${svgIcon('notebook')}${esc(meta.activity)}</span>`
           : ''
     const hint =
-      kind === 'lab'
+      kind === 'quiz'
+        ? '不需要注册账号。核对姓名后开始答卷，同名时请补充学号。试卷只能提交一次，成绩与答案由老师另行公布。'
+        : kind === 'lab'
         ? '不需要注册账号。姓名核对通过后打开互动练习，成绩会自动记录，再回来提交作业。'
         : kind === 'task'
           ? '不需要注册账号。姓名核对通过后按老师要求完成任务，可以写文字，也可以拍照上传作品。'
@@ -1780,7 +1785,9 @@
         <form class="sbk-assign-form" data-assign-form novalidate>
           <label for="sbk-assign-name">输入你的姓名</label>
           <input class="sbk-assign-input" id="sbk-assign-name" name="name" maxlength="30" autocomplete="name" aria-describedby="sbk-assign-name-error" aria-invalid="${!!state.assignError}" value="${esc(state.assignName)}" placeholder="要和老师名单里的姓名一致">
-          <button type="submit" class="sbk-primary sbk-assign-btn" ${state.assignBusy ? 'disabled' : ''}>${state.assignBusy ? '<span class="sbk-spinner" aria-hidden="true"></span>正在核对…' : '开始作业'}</button>
+          <label for="sbk-assign-student-no">学号 <span class="sbk-note">同名时必填，其余可留空</span></label>
+          <input class="sbk-assign-input" id="sbk-assign-student-no" name="studentNo" maxlength="40" autocomplete="off" aria-describedby="sbk-assign-name-error" value="${esc(state.assignStudentNo)}" placeholder="例如：001，保留开头的 0">
+          <button type="submit" class="sbk-primary sbk-assign-btn" ${state.assignBusy ? 'disabled' : ''}>${state.assignBusy ? '<span class="sbk-spinner" aria-hidden="true"></span>正在核对…' : kind === 'quiz' && meta.status === 'closed' ? '查看已提交试卷' : '开始作业'}</button>
         </form>
         <p class="sbk-assign-error" id="sbk-assign-name-error" role="alert">${esc(state.assignError || '')}</p>
         <p class="sbk-assign-hint">${hint}</p>
@@ -1900,6 +1907,94 @@
     `)
   }
 
+  function quizQuestions() {
+    const quiz = state.assignSubmission?.quiz || (state.assignMeta && state.assignMeta.quiz)
+    return quiz && Array.isArray(quiz.questions) ? quiz.questions : []
+  }
+
+  function quizDraftKey() { return `sbk-assign-quiz:${state.assignToken}:${state.assignMember?.id || ''}` }
+
+  function clearQuizDraft() {
+    try { sessionStorage.removeItem(quizDraftKey()) } catch { /* 当前浏览器可能禁止存储 */ }
+  }
+
+  function loadQuizDraft() {
+    try {
+      const value = JSON.parse(sessionStorage.getItem(quizDraftKey()) || '{}')
+      const answers = {}
+      quizQuestions().forEach((q) => {
+        const selected = value[q.id]
+        if (Number.isInteger(selected) && selected >= 0 && selected < q.options.length) answers[q.id] = selected
+      })
+      state.assignQuizAnswers = answers
+    } catch { state.assignQuizAnswers = {} }
+  }
+
+  function assignQuizHtml() {
+    const meta = state.assignMeta || {}
+    const questions = quizQuestions()
+    const answered = questions.filter((q) => Number.isInteger(state.assignQuizAnswers[q.id])).length
+    return assignWorkShellHtml(`<div class="sbk-assign-workbench-head"><div class="sbk-assign-workbench-title"><h1>${esc(meta.title || '试卷作业')}</h1><p>${questions.length} 道题 · 只能提交一次</p></div></div>
+      ${meta.instructions ? `<div class="sbk-assign-instructions"><b>作业要求</b><p>${esc(meta.instructions)}</p></div>` : ''}
+      <p class="sbk-note">请检查每道题后再提交。提交后不能修改或重做，成绩和答案由老师另行公布。</p>
+      <div class="sbk-quiz-questions">${questions.map((q, i) => `<fieldset class="sbk-quiz-question" data-quiz-id="${esc(q.id)}" ${state.assignBusy ? 'disabled' : ''}><legend><span>${i + 1}. ${q.type === 'boolean' ? '判断题' : '单选题'}</span><span>${Number(q.points) || 0} 分</span></legend><p class="sbk-quiz-stem">${esc(q.stem)}</p><div class="sbk-quiz-options">${(q.options || []).map((option, j) => `<label class="sbk-quiz-option${state.assignQuizAnswers[q.id] === j ? ' is-selected' : ''}"><input type="radio" name="quiz-${esc(q.id)}" data-quiz-answer="${esc(q.id)}" value="${j}" ${state.assignQuizAnswers[q.id] === j ? 'checked' : ''}><span>${q.type === 'boolean' ? '' : String.fromCharCode(65 + j) + '. '}${esc(option)}</span></label>`).join('')}</div></fieldset>`).join('') || '<p class="sbk-assign-error">试卷题目暂未加载，请刷新后重试。</p>'}</div>
+      <p class="sbk-assign-error" role="alert">${esc(state.assignError || '')}</p><p class="sbk-note" data-quiz-progress aria-live="polite">已答 ${answered} / ${questions.length} 题</p><div class="sbk-assign-actions"><button type="button" class="sbk-primary" data-act="assign-quiz-submit" ${state.assignBusy || !questions.length ? 'disabled' : ''}>${state.assignBusy ? '<span class="sbk-spinner"></span>提交中…' : '检查并提交试卷'}</button><button type="button" class="sbk-btn" data-act="assign-leave" ${state.assignBusy ? 'disabled' : ''}>换一名同学</button></div>`)
+  }
+
+  function assignQuizSubmittedHtml() {
+    const meta = state.assignMeta || {}
+    const sub = state.assignSubmission || {}
+    const content = sub.content || {}
+    const responses = Array.isArray(content.answers) ? content.answers : []
+    const answers = new Map(responses.map((item) => [item.questionId, item.answer]))
+    const questions = quizQuestions()
+    const showScore = meta.scoresPublished === true && sub.score != null
+    const showAnswers = meta.answersPublished === true
+    return assignWorkShellHtml(`<div class="sbk-quiz-submitted"><span class="sbk-assign-badge">${svgIcon('checkCircle')}</span><h1>已提交</h1><p>你的试卷已经交给老师，本次答卷不能修改或重做。</p>${showScore ? `<p class="sbk-quiz-score">成绩 ${esc(sub.score)} 分</p>` : '<p class="sbk-note">成绩尚未公布，请等老师通知。</p>'}${showAnswers ? '<p class="sbk-note">老师已公布答案与解析，可以对照复习。</p>' : '<p class="sbk-note">答案与解析尚未公布。</p>'}<div class="sbk-assign-actions"><button type="button" class="sbk-btn" data-act="assign-retry">刷新公布情况</button><button type="button" class="sbk-btn" data-act="assign-leave">换一名同学</button></div></div>
+      ${questions.length ? `<details class="sbk-quiz-review"><summary>${showAnswers ? '查看答卷与解析' : '查看我的作答'}</summary><ol>${questions.map((q, i) => `<li><p class="sbk-quiz-stem">${i + 1}. ${esc(q.stem)}</p><p>我的选择：${answers.has(q.id) ? esc(q.options[answers.get(q.id)] || '未作答') : '未作答'}</p>${showAnswers && Number.isInteger(q.answer) ? `<p class="sbk-quiz-correct">标准答案：${esc(q.options[q.answer] || '')}</p>${q.explanation ? `<p>解析：${esc(q.explanation)}</p>` : ''}` : ''}</li>`).join('')}</ol></details>` : ''}`)
+  }
+
+  function submitQuizAssignment() {
+    if (state.assignBusy || state.assignStatus !== 'quiz') return
+    const questions = quizQuestions()
+    const missing = questions.find((q) => !Number.isInteger(state.assignQuizAnswers[q.id]))
+    if (!questions.length) return
+    if (missing) {
+      state.assignError = '还有题目没有作答，请检查后再提交'
+      render()
+      const row = root && [...root.querySelectorAll('[data-quiz-id]')].find((el) => el.dataset.quizId === missing.id)
+      row?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      row?.querySelector('input')?.focus({ preventScroll: true })
+      return
+    }
+    const answers = questions.map((q) => ({ questionId: q.id, answer: state.assignQuizAnswers[q.id] }))
+    const requestSeq = state.seq
+    const memberId = state.assignMember?.id
+    openConfirm({ title: '确认提交试卷？', message: '请确认已经检查所有题目。提交后不能修改或重做，成绩和答案由老师另行公布。', confirmLabel: '确认提交', onConfirm: async () => {
+      if (state.seq !== requestSeq || state.assignMember?.id !== memberId || state.assignBusy) return
+      state.assignBusy = true
+      state.assignError = ''
+      render()
+      try {
+        const data = await assignApi(`/api/assign/${encodeURIComponent(state.assignToken)}/submit`, { method: 'POST', body: { kind: 'quiz', answers } })
+        if (state.seq !== requestSeq) return
+        state.assignSubmission = { ...(state.assignSubmission || {}), ...(data.submission || {}), status: 'submitted', content: { kind: 'quiz', answers } }
+        if (data.assignment) state.assignMeta = { ...state.assignMeta, ...data.assignment }
+        clearQuizDraft()
+        state.assignStatus = 'submitted'
+        state.assignBusy = false
+        render()
+        scrollTopStudio()
+      } catch (err) {
+        if (state.seq !== requestSeq) return
+        state.assignBusy = false
+        if (err.status === 409) { await loadAssign(); return }
+        state.assignError = errorMessage(err, '提交失败，你的作答已保留，可以重试')
+        render()
+      }
+    } })
+  }
+
   function assignShellHtml() {
     if (state.assignStatus === 'loading') return assignLoadingHtml()
     if (state.assignStatus === 'error') return assignErrorHtml()
@@ -1907,6 +2002,7 @@
     if (state.assignStatus === 'gate') return assignGateHtml()
     if (state.assignStatus === 'lab') return assignLabHtml()
     if (state.assignStatus === 'task') return assignTaskHtml()
+    if (state.assignStatus === 'quiz') return assignQuizHtml()
     if (state.assignStatus === 'submitted') return assignSubmittedHtml()
     return ''
   }
@@ -2456,7 +2552,18 @@
     const sub = state.assignSubmission
     const submitted = !!(sub && sub.status === 'submitted')
     if (!state.assignMember) {
-      state.assignStatus = meta.status === 'open' ? 'gate' : 'closed'
+      state.assignStatus = meta.status === 'open' || (kind === 'quiz' && meta.status === 'closed') ? 'gate' : 'closed'
+      return
+    }
+    if (kind === 'quiz') {
+      if (submitted) {
+        state.assignQuizAnswers = Object.fromEntries((sub.content?.answers || []).map((a) => [a.questionId, a.answer]))
+        clearQuizDraft()
+        state.assignStatus = 'submitted'
+      } else if (meta.status === 'open') {
+        loadQuizDraft()
+        state.assignStatus = 'quiz'
+      } else state.assignStatus = 'closed'
       return
     }
     if (kind === 'lab') {
@@ -2513,6 +2620,7 @@
       if (my !== state.seq) return
       state.assignMember = (meRes && meRes.member) || null
       state.assignSubmission = (meRes && meRes.submission) || null
+      if (meRes && meRes.assignment) state.assignMeta = { ...state.assignMeta, ...meRes.assignment }
 
       routeAssignSession()
       state.assignLoaded = true
@@ -2526,7 +2634,7 @@
     }
   }
 
-  async function verifyAssignName(rawName) {
+  async function verifyAssignName(rawName, rawStudentNo) {
     const name = String(rawName || '')
       .replace(/[　\r\n\t]/g, ' ')
       .replace(/\s+/g, ' ')
@@ -2539,6 +2647,7 @@
     }
     if (state.assignBusy) return
     state.assignName = name
+    state.assignStudentNo = String(rawStudentNo || '').trim()
     state.assignBusy = true
     state.assignError = ''
     render()
@@ -2546,11 +2655,12 @@
     try {
       const data = await assignApi(`/api/assign/${encodeURIComponent(state.assignToken)}/verify`, {
         method: 'POST',
-        body: { name },
+        body: { name, ...(state.assignStudentNo ? { studentNo: state.assignStudentNo } : {}) },
       })
       if (my !== state.seq) return
       state.assignMember = (data && data.member) || null
       state.assignSubmission = (data && data.submission) || null
+      if (data && data.assignment) state.assignMeta = { ...state.assignMeta, ...data.assignment }
       if (!state.assignMember) throw new Error('姓名核对失败，请重试')
       state.assignBusy = false
       routeAssignSession()
@@ -2572,7 +2682,9 @@
       state.assignStatus !== 'submitted' &&
       (kind === 'lab'
         ? typeof state.assignLabResult === 'number' || !!state.assignLabNote.trim()
-        : kind === 'task'
+        : kind === 'quiz'
+          ? Object.keys(state.assignQuizAnswers).length > 0
+          : kind === 'task'
           ? !!state.assignTaskText.trim() || state.assignTaskImages.length > 0
           : state.assignStatus === 'editor' && anyWorkStarted())
     const doLeave = async () => {
@@ -2583,13 +2695,16 @@
       }
       stopSupervisor()
       clearLabDraft()
+      clearQuizDraft()
       state.seq++
       state.assignMember = null
       state.assignSubmission = null
       state.assignName = ''
+      state.assignStudentNo = ''
+      state.assignQuizAnswers = {}
       state.assignError = ''
       state.assignBusy = false
-      state.assignStatus = state.assignMeta && state.assignMeta.status !== 'open' ? 'closed' : 'gate'
+      state.assignStatus = state.assignMeta && state.assignMeta.status !== 'open' && !(kind === 'quiz' && state.assignMeta.status === 'closed') ? 'closed' : 'gate'
       // 换人必须清掉上一个学生的内容，避免同一台设备上串作品
       state.customPoemName = ''
       state.pages = [emptyPage()]
@@ -2732,6 +2847,9 @@
       case 'assign-task-submit':
         submitTaskAssignment()
         break
+      case 'assign-quiz-submit':
+        submitQuizAssignment()
+        break
       case 'assign-task-remove':
         removeTaskImage(Number(btn.dataset.i))
         break
@@ -2743,7 +2861,8 @@
     if (!form || !root || !root.contains(form)) return
     e.preventDefault()
     const input = form.querySelector('input[name="name"]')
-    verifyAssignName(input ? input.value : '')
+    const studentNo = form.querySelector('input[name="studentNo"]')
+    verifyAssignName(input ? input.value : '', studentNo ? studentNo.value : '')
   }
 
   function onRootInput(e) {
@@ -2751,6 +2870,10 @@
     if (!target) return
     if (target.id === 'sbk-assign-name') {
       state.assignName = target.value
+      return
+    }
+    if (target.id === 'sbk-assign-student-no') {
+      state.assignStudentNo = target.value
       return
     }
     if (target.hasAttribute && target.hasAttribute('data-assign-task-text')) {
@@ -2775,6 +2898,22 @@
   }
 
   function onRootChange(e) {
+    const answer = e.target && e.target.closest ? e.target.closest('[data-quiz-answer]') : null
+    if (answer) {
+      if (state.assignStatus !== 'quiz' || state.assignBusy) return
+      const question = quizQuestions().find((q) => q.id === answer.dataset.quizAnswer)
+      const selected = Number(answer.value)
+      if (!question || !Number.isInteger(selected) || selected < 0 || selected >= question.options.length) return
+      state.assignQuizAnswers[question.id] = selected
+      state.assignError = ''
+      const error = root.querySelector('.sbk-assign-error[role="alert"]')
+      if (error) error.textContent = ''
+      try { sessionStorage.setItem(quizDraftKey(), JSON.stringify(state.assignQuizAnswers)) } catch { /* 浏览器可能禁止存储 */ }
+      answer.closest('[data-quiz-id]').querySelectorAll('.sbk-quiz-option').forEach((label) => label.classList.toggle('is-selected', label.querySelector('input').checked))
+      const progress = root.querySelector('[data-quiz-progress]')
+      if (progress) progress.textContent = `已答 ${quizQuestions().filter((q) => Number.isInteger(state.assignQuizAnswers[q.id])).length} / ${quizQuestions().length} 题`
+      return
+    }
     const file = e.target && e.target.closest ? e.target.closest('[data-assign-task-file]') : null
     if (file) {
       const picked = Array.from(file.files || [])
@@ -3284,6 +3423,31 @@ body.sbk-supervisor-on{padding-bottom:calc(var(--sbk-supervisor-space,96px) + en
   .sbk-print-end{text-align:center;padding:60mm 0}
   .sbk-print-end p{font-size:18px;letter-spacing:.2em}
   .sbk-print-end small{font-size:11px;color:#94a3b8}
+}
+.sbk-quiz-questions{display:grid;gap:18px;margin:22px 0}
+.sbk-quiz-question{min-width:0;margin:0;padding:18px;border:1px solid var(--sbk-border);border-radius:16px;background:var(--sbk-card)}
+.sbk-quiz-question legend{max-width:100%;display:flex;gap:14px;padding:0 7px;font-size:13px;color:var(--sbk-muted)}
+.sbk-quiz-stem{font-weight:600;font-size:16px;line-height:1.75;white-space:pre-wrap;overflow-wrap:anywhere;margin:4px 0 14px}
+.sbk-quiz-options{display:grid;gap:9px}
+.sbk-quiz-option{min-height:46px;display:flex;align-items:center;gap:12px;padding:11px 13px;border:1px solid var(--sbk-border);border-radius:11px;background:var(--sbk-soft);cursor:pointer;line-height:1.65;transition:background .16s,border-color .16s}
+.sbk-quiz-option input{width:18px;height:18px;flex:0 0 18px;margin:0;accent-color:var(--sbk-accent)}
+.sbk-quiz-option span{min-width:0;white-space:pre-wrap;overflow-wrap:anywhere}
+.sbk-quiz-option.is-selected{border-color:var(--sbk-accent);background:color-mix(in srgb,var(--sbk-accent) 9%,var(--sbk-card))}
+.sbk-quiz-option:has(input:focus-visible){outline:2px solid var(--sbk-accent);outline-offset:2px}
+.sbk-quiz-question:disabled .sbk-quiz-option{opacity:.7;cursor:wait}
+.sbk-quiz-submitted{text-align:center;padding:10px 0 18px}
+.sbk-quiz-submitted .sbk-assign-badge{margin-left:auto;margin-right:auto}
+.sbk-quiz-submitted .sbk-assign-actions{justify-content:center}
+.sbk-quiz-score{font-size:26px;font-weight:700;color:var(--sbk-accent)}
+.sbk-quiz-review summary{padding:12px 0;cursor:pointer;color:var(--sbk-accent);font-weight:600}
+.sbk-quiz-review ol{list-style:none;padding:0;display:grid;gap:14px}
+.sbk-quiz-review li{padding:16px;border:1px solid var(--sbk-border);border-radius:12px;background:var(--sbk-soft);overflow-wrap:anywhere}
+.sbk-quiz-review li p{white-space:pre-wrap}
+.sbk-quiz-correct{font-weight:600;color:var(--sbk-accent)}
+@media(max-width:600px){
+  .sbk-quiz-question{padding:13px}
+  .sbk-quiz-option{font-size:16px;padding:11px}
+  .sbk-quiz-stem{font-size:16px}
 }
 @media (prefers-reduced-motion: reduce){
   .sbk-page *{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}

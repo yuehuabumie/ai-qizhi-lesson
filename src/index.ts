@@ -11,6 +11,7 @@ import { progressRoutes } from './routes/progress.js'
 import { worksRoutes } from './routes/works.js'
 import { aiRoutes } from './routes/ai.js'
 import { classesRoutes } from './routes/classes.js'
+import { prepRoutes } from './routes/prep.js'
 
 const app = Fastify({
   // nginx 在前面，不信任代理的话 req.ip 永远是 127.0.0.1，限流会误伤所有人
@@ -72,6 +73,7 @@ await app.register(progressRoutes, { prefix: '/api' })
 await app.register(worksRoutes, { prefix: '/api' })
 await app.register(aiRoutes, { prefix: '/api' })
 await app.register(classesRoutes, { prefix: '/api' })
+await app.register(prepRoutes, { prefix: '/api' })
 
 // ── 优雅退出：systemctl restart 时不掐断在途请求 / 不漏连接 ──
 let closing = false

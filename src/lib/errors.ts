@@ -18,6 +18,7 @@ export type ErrorCode =
   | 'MAIL_SEND_FAILED'
   | 'GEN_FAILED'
   | 'INTERNAL_ERROR'
+  | 'CONFLICT'
 
 const STATUS: Record<ErrorCode, number> = {
   VALIDATION_ERROR: 400,
@@ -32,6 +33,7 @@ const STATUS: Record<ErrorCode, number> = {
   MAIL_SEND_FAILED: 502,
   GEN_FAILED: 502,
   INTERNAL_ERROR: 500,
+  CONFLICT: 409,
 }
 
 export class ApiError extends Error {

@@ -1,0 +1,31 @@
+[Unit]
+Description=Peer-only BBR route for AI Qizhi private transport
+After=network-online.target
+Wants=network-online.target
+Before=aiq-prep-tunnel.service aiq-prep.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+EnvironmentFile=/etc/aiq-prep/peer.env
+ExecStart=/usr/bin/python3 /usr/local/lib/aiq-prep/setup-peer-route.py apply
+ExecStop=/usr/bin/python3 /usr/local/lib/aiq-prep/setup-peer-route.py remove
+RemainAfterExit=yes
+TimeoutStartSec=45
+TimeoutStopSec=30
+StateDirectory=aiq-prep-peer-route
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ReadWritePaths=/var/lib/aiq-prep-peer-route /run/lock
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_SYS_MODULE
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

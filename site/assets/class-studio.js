@@ -189,8 +189,8 @@
 
   const STAGE_KEYS = ['low', 'mid', 'high']
   const STAGE_TEXT = { low: '低段 1–2 年级', mid: '中段 3–4 年级', high: '高段 5–6 年级' }
-  const TYPE_TEXT = { storybook: 'AI 绘本创作', lab: '互动练习', task: '课程任务' }
-  const TYPE_ICON = { storybook: 'book', lab: 'sparkles', task: 'file' }
+  const TYPE_TEXT = { storybook: 'AI 绘本创作', lab: '互动练习', task: '课程任务', quiz: '试卷' }
+  const TYPE_ICON = { storybook: 'book', lab: 'sparkles', task: 'file', quiz: 'file' }
 
   const moduleById = (id) => MODULES.find((m) => m.id === id) || null
   const labById = (id) => LABS.find((l) => l.id === id) || null
@@ -324,6 +324,7 @@
     me: null,
     classes: [],
     cls: null,
+    groups: [],
     assignment: null,
     loading: false,
     error: '',
@@ -342,6 +343,7 @@
     S.assignmentId = (params && params.assignmentId) || ''
     S.classes = []
     S.cls = null
+    S.groups = []
     S.assignment = null
     S.loading = true
     S.error = ''
@@ -447,7 +449,7 @@
           </div>
           <button type="submit" class="cls-btn cls-primary" data-busy="create-class">${svgIcon('plus')}创建班级</button>
         </form>
-        <p class="cls-hint">班级上限 20 个，每个班最多 100 名学生；名单内姓名不能重复。</p>
+        <p class="cls-hint">班级上限 20 个，每个班最多 100 名学生；同名学生请填写不同学号。</p>
       </section>
 
       <div class="cls-section-head">
@@ -506,9 +508,9 @@
       .map(
         (m, i) => `<li class="cls-member" data-member-id="${esc(m.id)}">
           <span class="cls-member-index">${i + 1}</span>
-          <span class="cls-member-name">${esc(m.name)}</span>
+          <span class="cls-member-info"><span class="cls-member-name">${esc(m.name)}</span><small>${esc([m.studentNo && `学号 ${m.studentNo}`, m.gender, m.score != null && `成绩 ${m.score}`].filter(Boolean).join(' · '))}</small></span>
           <span class="cls-member-actions">
-            <button type="button" class="cls-icon-btn" data-act="rename-member" data-id="${esc(m.id)}" title="重命名" aria-label="重命名 ${esc(m.name)}">${svgIcon('edit')}</button>
+            <button type="button" class="cls-icon-btn" data-act="rename-member" data-id="${esc(m.id)}" title="编辑学生资料" aria-label="编辑 ${esc(m.name)}${m.studentNo ? `（学号 ${esc(m.studentNo)}）` : ''} 的资料">${svgIcon('edit')}</button>
             <button type="button" class="cls-icon-btn is-danger" data-act="delete-member" data-id="${esc(m.id)}" title="移出名单" aria-label="移出 ${esc(m.name)}">${svgIcon('trash')}</button>
           </span>
         </li>`,
@@ -551,12 +553,97 @@
               <small>${done} / ${total} 人已提交 · 建于 ${esc(dateText(a.createdAt))}</small>
               <span class="cls-progress" aria-hidden="true"><i style="width:${pct}%"></i></span>
             </span>
-            <span class="cls-chip ${closed ? 'is-idle' : 'is-open'}">${closed ? '已关闭' : '进行中'}</span>
+            <span class="cls-chip ${closed ? 'is-idle' : 'is-open'}">${a.status === 'draft' ? '草稿' : closed ? '已关闭' : '进行中'}</span>
             ${svgIcon('arrowRight', 'cls-assign-go')}
           </a>
         </li>`
       })
       .join('')}</ul>`
+  }
+
+  function groupsCardHtml() {
+    const groups = S.groups || []
+    return `<section class="cls-card cls-groups-card">
+      <div class="cls-card-head cls-groups-head"><div><h2>班级分组 <span class="cls-count">${groups.length} 组</span></h2><p>分组会保存在班级中；每名学生仍单独完成、提交作业。</p></div>
+        <button type="button" class="cls-btn cls-primary" data-act="edit-groups" ${S.cls && S.cls.members.length ? '' : 'disabled'}>${svgIcon('users')}${groups.length ? '调整分组' : '创建分组'}</button></div>
+      ${groups.length ? `<div class="cls-group-grid">${groups.map((g) => `<article class="cls-group-card"><h3>${esc(g.name)}</h3><p>${(g.members || []).map((m) => `<span class="cls-group-chip">${esc(m.name)}${m.studentNo ? ` <small>${esc(m.studentNo)}</small>` : ''}</span>`).join('') || '暂无成员'}</p></article>`).join('')}</div>` : '<p class="cls-hint">可以按组数随机分配，也可参考已提供的性别或成绩进行均衡，然后逐人调整。</p>'}
+    </section>`
+  }
+
+  function shuffled(items) {
+    const result = items.slice()
+    for (let i = result.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[result[i], result[j]] = [result[j], result[i]]
+    }
+    return result
+  }
+
+  function distributeGroups(members, count, mode) {
+    const n = Math.max(1, Math.min(members.length, Math.trunc(count) || 1))
+    const groups = Array.from({ length: n }, (_, i) => ({ name: `第 ${i + 1} 组`, memberIds: [], total: 0, genders: {} }))
+    let people = shuffled(members)
+    if (mode === 'score') people.sort((a, b) => (b.score == null ? -1 : Number(b.score)) - (a.score == null ? -1 : Number(a.score)))
+    people.forEach((member) => {
+      const shortest = Math.min(...groups.map((g) => g.memberIds.length))
+      const candidates = groups.filter((g) => g.memberIds.length === shortest)
+      if (mode === 'score') candidates.sort((a, b) => a.total - b.total)
+      if (mode === 'gender') candidates.sort((a, b) => (a.genders[member.gender || '未提供'] || 0) - (b.genders[member.gender || '未提供'] || 0))
+      const group = candidates[0]
+      group.memberIds.push(member.id)
+      group.total += Number(member.score) || 0
+      const gender = member.gender || '未提供'
+      group.genders[gender] = (group.genders[gender] || 0) + 1
+    })
+    return groups.map(({ name, memberIds }) => ({ name, memberIds }))
+  }
+
+  function editGroupsModal() {
+    if (!S.cls || !S.cls.members.length) return
+    const cls = S.cls
+    let draft = (S.groups || []).map((g) => ({ name: g.name, memberIds: (g.members || []).map((m) => m.id) }))
+    if (!draft.length) draft = distributeGroups(cls.members, Math.ceil(cls.members.length / 4), 'random')
+    const editor = () => `<div class="cls-group-names">${draft.map((g, i) => `<label>第 ${i + 1} 组名称<input class="cls-input" data-group-name="${i}" maxlength="60" value="${esc(g.name)}"></label>`).join('')}</div>
+      <div class="cls-group-members">${cls.members.map((m, i) => {
+        const found = draft.findIndex((g) => g.memberIds.includes(m.id))
+        return `<label class="cls-group-member"><span>${esc(m.name)}${m.studentNo ? `<small>学号 ${esc(m.studentNo)}</small>` : ''}</span><select class="cls-input" data-group-member="${esc(m.id)}" aria-label="${esc(m.name)}${m.studentNo ? `（学号 ${esc(m.studentNo)}）` : ''} 的分组">${draft.map((g, j) => `<option value="${j}"${j === Math.max(0, found) ? ' selected' : ''}>${esc(g.name || `第 ${j + 1} 组`)}</option>`).join('')}</select></label>`
+      }).join('')}</div>`
+    openModal(`<form class="cls-modal-form" data-form="save-groups"><div class="cls-modal-head"><div><h2>调整班级分组</h2><p class="cls-modal-sub">${cls.members.length} 名学生，每人只属于一个小组。</p></div><button type="button" class="cls-icon-btn" data-act="close-modal" aria-label="关闭">${svgIcon('close')}</button></div>
+      <div class="cls-group-controls"><label>小组数量<input class="cls-input" data-group-count type="number" min="1" max="${cls.members.length}" value="${draft.length}"></label><label>分配方式<select class="cls-input" data-group-mode><option value="random">随机分配</option><option value="gender">参考性别均衡</option><option value="score">参考成绩均衡</option></select></label><button type="button" class="cls-btn" data-group-generate>生成分组预览</button></div>
+      <p class="cls-hint">未提供的性别或成绩不会补造；生成后还可以逐人调整。保存只更新分组，不改变作业和学生提交。</p><div data-group-editor>${editor()}</div><p class="cls-inline-error" data-group-error role="alert"></p><div class="cls-modal-actions"><button type="button" class="cls-btn cls-ghost" data-act="close-modal">取消</button><button type="submit" class="cls-btn cls-primary" data-busy="save-groups">确认保存分组</button></div></form>`, (el) => {
+      const form = el.querySelector('form')
+      const errors = el.querySelector('[data-group-error]')
+      const read = () => {
+        const result = draft.map((g, i) => ({ name: el.querySelector(`[data-group-name="${i}"]`).value.trim(), memberIds: [] }))
+        el.querySelectorAll('[data-group-member]').forEach((select) => result[Number(select.value)].memberIds.push(select.dataset.groupMember))
+        return result
+      }
+      el.querySelector('[data-group-generate]').addEventListener('click', () => {
+        const count = Number(el.querySelector('[data-group-count]').value)
+        const mode = el.querySelector('[data-group-mode]').value
+        if (!Number.isInteger(count) || count < 1 || count > cls.members.length) { errors.textContent = '组数需在 1 与班级人数之间'; return }
+        if (mode === 'score' && !cls.members.some((m) => m.score != null)) { errors.textContent = '名单尚未提供成绩，请先补充或选择随机分配'; return }
+        if (mode === 'gender' && !cls.members.some((m) => m.gender)) { errors.textContent = '名单尚未提供性别，请先补充或选择随机分配'; return }
+        draft = distributeGroups(cls.members, count, mode)
+        el.querySelector('[data-group-editor]').innerHTML = editor()
+        errors.textContent = ''
+      })
+      form.addEventListener('submit', (e) => {
+        e.preventDefault()
+        const groups = read()
+        if (groups.some((g) => !g.name || !g.memberIds.length)) { errors.textContent = '每组都需要名称和至少一名学生'; return }
+        if (new Set(groups.map((g) => g.name)).size !== groups.length) { errors.textContent = '小组名称不能重复'; return }
+        withBusy('save-groups', async () => {
+          try {
+            await api(`/api/classes/${encodeURIComponent(cls.id)}/groups`, { method: 'PUT', body: { groups } })
+            if (modalEl !== el) return
+            closeModal()
+            showToast('分组已保存，学生仍各自提交作业')
+            if (S.classId === cls.id) await loadClass()
+          } catch (err) { if (modalEl === el) errors.textContent = err.message || '分组保存失败' }
+        })
+      })
+    })
   }
 
   function classShell() {
@@ -580,12 +667,13 @@
         <section class="cls-card cls-roster">
           <div class="cls-card-head">
             <h2>学生名单 <span class="cls-count">${c.memberCount} / ${MAX_MEMBERS}</span></h2>
-            <p>学生凭姓名匹配名单进入作业，重名请加上区分（如「张三 A」）。</p>
+            <p>姓名必填；学号、性别和成绩可留空。同名学生请补充不同学号，进入作业时再核对学号。</p>
           </div>
           <form class="cls-roster-form" data-form="add-members" novalidate>
-            <textarea class="cls-textarea" name="names" rows="3" placeholder="每行一个姓名，也可用逗号分隔&#10;例如：&#10;李明&#10;王小雨&#10;陈晨" ${canAdd ? '' : 'disabled'}></textarea>
+            <label class="cls-sr" for="cls-roster-paste">粘贴学生名单</label>
+            <textarea class="cls-textarea" id="cls-roster-paste" name="names" rows="3" placeholder="每行一个姓名，或从表格粘贴四列：姓名、学号、性别、成绩&#10;李明&#9;001&#9;男&#9;85&#10;王小雨&#9;002&#9;女" ${canAdd ? '' : 'disabled'}></textarea>
             <div class="cls-roster-form-foot">
-              <span class="cls-hint">${canAdd ? '支持从表格直接复制；重复姓名会自动跳过。' : '名单已满 100 人。'}</span>
+              <span class="cls-hint">${canAdd ? '支持姓名列表和带表头的表格；图片和文件名单可交给「智能备课」整理。' : '名单已满 100 人。'}</span>
               <button type="submit" class="cls-btn cls-primary" data-busy="add-members" ${canAdd ? '' : 'disabled'}>${svgIcon('plus')}导入名单</button>
             </div>
           </form>
@@ -595,7 +683,7 @@
         <section class="cls-card cls-assignments">
           <div class="cls-card-head">
             <h2>作业 <span class="cls-count">${c.assignments.length}</span></h2>
-            <p>作业可以是 AI 绘本、互动练习或课程任务；选好内容后生成链接，发到班级群，学生点开即可完成。</p>
+            <p>选择 AI 绘本、互动练习、课程任务或试卷；试卷可以先保存草稿，检查后再发布。</p>
           </div>
           <form class="cls-assign-form" data-form="create-assignment" novalidate>
             <div class="cls-field">
@@ -604,6 +692,7 @@
                 <option value="storybook">AI 绘本创作 · 学生用创作台生成绘本</option>
                 <option value="lab">互动练习 · 学生完成指定训练并提交成绩</option>
                 <option value="task">课程任务 · 学生写文字、传照片，可搭配工具台</option>
+                <option value="quiz">试卷 · 单选和判断，学生只提交一次</option>
               </select>
             </div>
             <div class="cls-field" data-assign-kind="lab" hidden>
@@ -631,6 +720,12 @@
                 <span class="cls-hint">学生可以直接从作业页打开这个互动训练，完成后再回来提交。</span>
               </div>
             </div>
+            <div class="cls-field" data-assign-kind="quiz" hidden>
+              <p class="cls-hint">学生提交后只显示「已提交」；成绩和答案均由你主动公布。</p>
+              ${quizBuilderHtml([])}
+              <label for="cls-quiz-publish">保存方式</label>
+              <select class="cls-input" id="cls-quiz-publish" name="quizStatus"><option value="draft">保存为草稿，稍后发布</option><option value="open">确认后发布给学生</option></select>
+            </div>
             <div class="cls-field">
               <label for="cls-assign-title">作业名称</label>
               <input class="cls-input" id="cls-assign-title" name="title" maxlength="120" placeholder="例如：古诗《静夜思》绘本创作" autocomplete="off">
@@ -639,12 +734,13 @@
               <label for="cls-assign-instructions">作业说明 <span class="cls-muted">选填</span></label>
               <textarea class="cls-textarea" id="cls-assign-instructions" name="instructions" rows="2" maxlength="1000" placeholder="例如：选一首学过的古诗，为它画 4 页绘本。"></textarea>
             </div>
-            <button type="submit" class="cls-btn cls-primary" data-busy="create-assignment" ${c.memberCount ? '' : 'disabled'}>${svgIcon('link')}生成作业链接</button>
+            <button type="submit" class="cls-btn cls-primary" data-create-label data-busy="create-assignment" ${c.memberCount ? '' : 'disabled'}>${svgIcon('link')}生成作业链接</button>
             ${c.memberCount ? '' : '<p class="cls-hint">先导入至少一名学生，才能生成作业链接。</p>'}
           </form>
           <div class="cls-assign-wrap">${assignmentRows()}</div>
         </section>
       </div>
+      ${groupsCardHtml()}
     </div>`
   }
 
@@ -655,9 +751,13 @@
     S.error = ''
     if (root) root.innerHTML = skeleton()
     try {
-      const data = await api(`/api/classes/${encodeURIComponent(S.classId)}`)
+      const [data, groupData] = await Promise.all([
+        api(`/api/classes/${encodeURIComponent(S.classId)}`),
+        api(`/api/classes/${encodeURIComponent(S.classId)}/groups`),
+      ])
       if (my !== seq) return
       S.cls = data && data.class ? data.class : null
+      S.groups = Array.isArray(groupData && groupData.groups) ? groupData.groups : []
       if (!S.cls) throw new Error('班级不存在或已被删除')
       if (!root) return
       root.innerHTML = classShell()
@@ -689,7 +789,7 @@
 
   function metricCell(m) {
     const type = (S.assignment && S.assignment.type) || 'storybook'
-    if (type === 'lab') {
+    if (type === 'lab' || type === 'quiz') {
       return `<span class="cls-score${m.score == null ? ' is-empty' : ''}">${m.score == null ? '—' : `${Number(m.score)} 分`}</span>`
     }
     if (type === 'task') {
@@ -714,9 +814,10 @@
         const work = m.work
         const published = !!(work && work.published)
         const canPreview = m.status === 'submitted'
-        const resetDisabled = published || !canPreview
+        const isQuiz = S.assignment.type === 'quiz'
+        const resetDisabled = isQuiz || published || !canPreview
         return `<tr>
-          <td data-label="学生"><span class="cls-student">${esc(m.name)}</span></td>
+          <td data-label="学生"><span class="cls-student">${esc(m.name)}</span>${m.studentNo ? `<small class="cls-student-no">${esc(m.studentNo)}</small>` : ''}</td>
           <td data-label="状态">${statusChip(m.status)}</td>
           <td data-label="${esc(metricLabel())}">${metricCell(m)}</td>
           <td data-label="提交时间"><span class="cls-muted">${m.submittedAt ? esc(timeText(m.submittedAt)) : '—'}</span></td>
@@ -726,8 +827,8 @@
           <td data-label="操作">
             <div class="cls-row-actions">
               <button type="button" class="cls-btn cls-sm ${canPreview ? '' : 'is-disabled'}" data-act="open-submission" data-id="${esc(m.submissionId || '')}" ${canPreview ? '' : 'disabled'}>${svgIcon('eye')}查看</button>
-              <button type="button" class="cls-btn cls-sm cls-ghost" data-act="publish-submission" data-id="${esc(m.submissionId || '')}" ${canPreview && !published ? '' : 'disabled'}>${svgIcon('upload')}${published ? '已发布' : '发布'}</button>
-              <button type="button" class="cls-btn cls-sm cls-danger-ghost" data-act="reset-submission" data-id="${esc(m.submissionId || '')}" title="${published ? '请先撤下展厅作品' : '清空这次提交，学生可以重做'}" ${resetDisabled ? 'disabled' : ''}>${svgIcon('refresh')}重置</button>
+              ${isQuiz ? '<span class="cls-hint">试卷仅提交一次</span>' : `<button type="button" class="cls-btn cls-sm cls-ghost" data-act="publish-submission" data-id="${esc(m.submissionId || '')}" ${canPreview && !published ? '' : 'disabled'}>${svgIcon('upload')}${published ? '已发布' : '发布'}</button>
+              <button type="button" class="cls-btn cls-sm cls-danger-ghost" data-act="reset-submission" data-id="${esc(m.submissionId || '')}" title="${published ? '请先撤下展厅作品' : '清空这次提交，学生可以重做'}" ${resetDisabled ? 'disabled' : ''}>${svgIcon('refresh')}重置</button>`}
             </div>
           </td>
         </tr>`
@@ -737,10 +838,16 @@
 
   function metricLabel() {
     const type = (S.assignment && S.assignment.type) || 'storybook'
-    return type === 'lab' ? '得分' : type === 'task' ? '提交内容' : 'AI 次数'
+    return type === 'lab' || type === 'quiz' ? '得分' : type === 'task' ? '提交内容' : 'AI 次数'
   }
 
   function assignmentContentCard(a) {
+    if (a.type === 'quiz') {
+      const questions = a.quiz && Array.isArray(a.quiz.questions) ? a.quiz.questions : []
+      return `<section class="cls-card cls-quiz-summary"><div class="cls-card-head"><h2>试卷内容 <span class="cls-count">${questions.length} 题 · ${questions.reduce((n, q) => n + Number(q.points || 0), 0)} 分</span></h2><p>学生只能提交一次，成绩与答案默认不公开。下方答案仅供教师查看。</p></div>
+        <div class="cls-quiz-release"><button type="button" class="cls-btn" data-act="publish-quiz-scores" ${a.scoresPublished ? 'disabled' : 'data-busy="quiz-release"'}>${a.scoresPublished ? '成绩已公布' : '公布成绩'}</button><button type="button" class="cls-btn" data-act="publish-quiz-answers" ${a.answersPublished ? 'disabled' : 'data-busy="quiz-release"'}>${a.answersPublished ? '答案解析已公布' : '公布答案解析'}</button>${a.status === 'draft' ? '<button type="button" class="cls-btn cls-ghost" data-act="edit-quiz">编辑草稿</button>' : ''}</div>
+        <details class="cls-quiz-details"><summary>查看题目和标准答案</summary>${quizPreviewHtml(questions)}</details></section>`
+    }
     if (a.type === 'lab') {
       const lab = labById(a.labId)
       return `<section class="cls-card cls-instructions">
@@ -786,8 +893,8 @@
           <p class="cls-sub">${esc(meta)}</p>
         </div>
         <div class="cls-head-actions">
-          <span class="cls-chip ${closed ? 'is-idle' : 'is-open'}">${closed ? '已关闭' : '接收提交中'}</span>
-          <button type="button" class="cls-btn cls-ghost" data-act="toggle-assignment">${closed ? '重新开放' : '关闭作业'}</button>
+          <span class="cls-chip ${closed ? 'is-idle' : 'is-open'}">${a.status === 'draft' ? '草稿' : closed ? '已关闭' : '接收提交中'}</span>
+          <button type="button" class="cls-btn cls-ghost" data-act="toggle-assignment">${a.status === 'draft' ? '发布试卷' : closed ? '重新开放' : '关闭作业'}</button>
           <button type="button" class="cls-btn cls-danger-ghost" data-act="delete-assignment">${svgIcon('trash')}删除</button>
         </div>
       </header>
@@ -800,7 +907,7 @@
           <span class="cls-share-icon">${svgIcon('link')}</span>
           <div>
             <h2>发给学生的作业链接</h2>
-            <p>学生打开链接后输入姓名，匹配名单即可开始；不需要注册账号。</p>
+            <p>学生输入姓名，同名时补充学号；不需要注册账号。${a.status === 'draft' ? '当前为草稿，发布前学生不能作答。' : ''}</p>
           </div>
         </div>
         <div class="cls-share-row">
@@ -967,11 +1074,15 @@
     }
     modalEl.addEventListener('click', onModalClick)
     modalEl.addEventListener('submit', onModalSubmit)
+    modalEl.addEventListener('input', onInput)
+    modalEl.addEventListener('change', onChange)
     document.addEventListener('keydown', onKey, true)
     modalCleanup = () => {
       if (modalEl) {
         modalEl.removeEventListener('click', onModalClick)
         modalEl.removeEventListener('submit', onModalSubmit)
+        modalEl.removeEventListener('input', onInput)
+        modalEl.removeEventListener('change', onChange)
       }
       document.removeEventListener('keydown', onKey, true)
       background.forEach(([el, inert]) => { el.inert = inert })
@@ -1004,14 +1115,17 @@
     openModal(
       `<form class="cls-modal-form" data-form="rename-member" data-id="${esc(member.id)}" novalidate>
         <div class="cls-modal-head">
-          <h2>修改姓名</h2>
+          <h2>编辑学生资料</h2>
           <button type="button" class="cls-icon-btn" data-act="close-modal" aria-label="关闭">${svgIcon('close')}</button>
         </div>
         <div class="cls-field">
           <label for="cls-modal-member">学生姓名</label>
           <input class="cls-input" id="cls-modal-member" name="name" maxlength="120" value="${esc(member.name)}" autocomplete="off">
-          <span class="cls-hint">改完姓名后，学生要用新姓名才能进入作业。</span>
+          <span class="cls-hint">改完后学生使用新姓名进入；同名学生需填写不同学号。</span>
         </div>
+        <div class="cls-member-fields"><div class="cls-field"><label for="cls-member-no">学号 <span class="cls-muted">选填</span></label><input class="cls-input" id="cls-member-no" name="studentNo" maxlength="40" value="${esc(member.studentNo || '')}" autocomplete="off"></div>
+          <div class="cls-field"><label for="cls-member-gender">性别 <span class="cls-muted">选填</span></label><input class="cls-input" id="cls-member-gender" name="gender" maxlength="20" value="${esc(member.gender || '')}" autocomplete="off"></div>
+          <div class="cls-field"><label for="cls-member-score">成绩 <span class="cls-muted">选填</span></label><input class="cls-input" id="cls-member-score" name="score" type="number" min="0" max="1000000" step="any" value="${member.score == null ? '' : esc(member.score)}"></div></div>
         <div class="cls-modal-actions">
           <button type="button" class="cls-btn cls-ghost" data-act="close-modal">取消</button>
           <button type="submit" class="cls-btn cls-primary" data-busy="rename-member">保存</button>
@@ -1080,16 +1194,30 @@
       }`
   }
 
+  function quizPreviewHtml(questions, responses) {
+    const submitted = Array.isArray(responses) ? new Map(responses.map((a) => [a.questionId, a.answer])) : null
+    return `<ol class="cls-quiz-preview">${questions.map((q, i) => {
+      const options = Array.isArray(q.options) ? q.options : []
+      const chosen = submitted && submitted.get(q.id)
+      return `<li><div class="cls-quiz-question-head"><span>${i + 1}. ${q.type === 'boolean' ? '判断题' : '单选题'}</span><span>${Number(q.points) || 0} 分</span></div><p class="cls-quiz-stem">${esc(q.stem)}</p><ul>${options.map((option, j) => `<li>${String.fromCharCode(65 + j)}. ${esc(option)}</li>`).join('')}</ul>${submitted ? `<p>学生作答：${chosen == null ? '未作答' : esc(options[chosen] || '未作答')}</p>` : ''}${Number.isInteger(q.answer) ? `<p class="cls-quiz-answer">标准答案：${esc(options[q.answer] || '')}</p>${q.explanation ? `<p class="cls-hint">解析：${esc(q.explanation)}</p>` : ''}` : ''}</li>`
+    }).join('')}</ol>`
+  }
+
+  function quizSubmissionPreview(sub) {
+    const quiz = sub.quiz || {}
+    return `<p class="cls-quiz-result">${sub.score == null && quiz.score == null ? '暂无评分' : `得分 ${Number(sub.score == null ? quiz.score : sub.score)} / ${Number(quiz.totalPoints) || 0}`}</p>${quizPreviewHtml(quiz.questions || [], quiz.answers || [])}`
+  }
+
   function submissionModalHtml(sub) {
     const type = sub.type || 'storybook'
     const published = !!(sub.work && sub.work.published)
     const title =
       type === 'lab'
         ? sub.labTitle || sub.assignmentTitle
-        : type === 'task'
+        : type === 'task' || type === 'quiz'
           ? sub.assignmentTitle
           : sub.poemName || '未命名故事'
-    const body = type === 'lab' ? labPreview(sub) : type === 'task' ? taskPreview(sub) : storybookPreview(sub)
+    const body = type === 'quiz' ? quizSubmissionPreview(sub) : type === 'lab' ? labPreview(sub) : type === 'task' ? taskPreview(sub) : storybookPreview(sub)
     const scoreText =
       type === 'lab' && sub.score != null ? ` · 得分 ${Number(sub.score)} 分` : ''
 
@@ -1106,7 +1234,9 @@
       </div>
       <div class="cls-modal-foot">
         ${
-          published
+          type === 'quiz'
+            ? '<p class="cls-hint">试卷记录仅用于教学反馈，不发布到成果展厅。</p><button type="button" class="cls-btn cls-ghost" data-act="close-modal">关闭</button>'
+            : published
             ? `<button type="button" class="cls-btn cls-danger-ghost" data-act="unpublish-submission" data-id="${esc(sub.id)}">${svgIcon('close')}从展厅撤下</button>
                <button type="button" class="cls-btn cls-ghost" data-act="close-modal">关闭</button>`
             : `<div class="cls-author-field">
@@ -1182,23 +1312,54 @@
     return S.cls && S.cls.members.find((m) => m.id === id)
   }
 
+  function parseRosterText(text) {
+    const lines = String(text || '').replace(/^\uFEFF/, '').split(/\r?\n/).filter((s) => s.trim())
+    if (!lines.length) return []
+    const splitRow = (line) => {
+      if (line.includes('\t')) return line.split('\t').map((s) => s.trim())
+      const cells = []; let cell = '', quoted = false
+      for (let i = 0; i < line.length; i++) {
+        const char = line[i]
+        if (char === '"' && line[i + 1] === '"' && quoted) { cell += '"'; i++; continue }
+        if (char === '"') { quoted = !quoted; continue }
+        if ((char === ',' || char === '，') && !quoted) { cells.push(cell.trim()); cell = '' } else cell += char
+      }
+      if (quoted) throw new Error('名单中有未闭合的引号，请检查表格内容')
+      cells.push(cell.trim())
+      return cells
+    }
+    const first = splitRow(lines[0])
+    const nameIndex = first.findIndex((s) => /^(姓名|学生姓名|名字)$/i.test(s))
+    const tabular = nameIndex >= 0 || lines.some((line) => line.includes('\t')) || (first.length > 1 && /^\d+$/.test(first[1]))
+    if (!tabular) return [...new Set(String(text || '').split(/[\n\r,，、;；]+/).map((s) => s.replace(/\s+/g, ' ').trim()).filter(Boolean))].map((name) => ({ name }))
+    const index = (pattern, fallback) => nameIndex >= 0 ? first.findIndex((s) => pattern.test(s)) : fallback
+    const positions = { name: nameIndex >= 0 ? nameIndex : 0, studentNo: index(/^(学号|学生编号|student\s*(no|id))$/i, 1), gender: index(/^(性别|gender)$/i, 2), score: index(/^(成绩|分数|总分|score)$/i, 3) }
+    return lines.slice(nameIndex >= 0 ? 1 : 0).map((line, i) => {
+      const cells = splitRow(line)
+      const take = (key) => positions[key] < 0 ? '' : String(cells[positions[key]] || '').trim()
+      const name = take('name')
+      if (!name) throw new Error(`第 ${i + (nameIndex >= 0 ? 2 : 1)} 行缺少姓名，请补充后导入`)
+      const rawScore = take('score')
+      const score = rawScore === '' ? null : Number(rawScore)
+      if (score != null && (!Number.isFinite(score) || score < 0 || score > 1000000)) throw new Error(`「${name}」的成绩不是有效数字，请留空或填写非负数字`)
+      return { name, studentNo: take('studentNo') || null, gender: take('gender') || null, score }
+    })
+  }
+
   async function addMembers(form) {
     const values = readForm(form)
-    const names = String(values.names || '')
-      .split(/[\n\r,，、;；]+/)
-      .map((s) => s.replace(/[　\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim())
-      .filter(Boolean)
-    const unique = [...new Set(names)]
-    if (!unique.length) return showToast('请先填写学生姓名')
-    if (unique.length > MAX_MEMBERS) return showToast(`一次最多导入 ${MAX_MEMBERS} 人`)
+    let members
+    try { members = parseRosterText(values.names) } catch (err) { return showToast(err.message) }
+    if (!members.length) return showToast('请先填写学生姓名')
+    if (members.length > MAX_MEMBERS) return showToast(`一次最多导入 ${MAX_MEMBERS} 人`)
     await withBusy('add-members', async () => {
       try {
         const res = await api(`/api/classes/${encodeURIComponent(S.classId)}/members`, {
           method: 'POST',
-          body: { names: unique },
+          body: { members },
         })
         showToast(
-          res.skipped ? `已导入 ${res.added} 人，跳过 ${res.skipped} 个重复姓名` : `已导入 ${res.added} 人`,
+          res.skipped ? `已导入 ${res.added} 人，跳过 ${res.skipped} 条重复记录` : `已导入 ${res.added} 人`,
         )
         form.reset()
         await loadClass()
@@ -1206,6 +1367,76 @@
         showToast(err.message || '导入失败')
       }
     })
+  }
+
+  let questionSequence = 0
+  function newQuizQuestion() {
+    return { id: `q-${Date.now().toString(36)}-${++questionSequence}`, type: 'single', stem: '', options: ['', '', '', ''], answer: 0, points: 10, explanation: '' }
+  }
+
+  function quizQuestionHtml(question, index) {
+    const q = question || newQuizQuestion()
+    const options = q.type === 'boolean' ? ['正确', '错误'] : q.options || []
+    const prefix = `cls-quiz-${q.id}`
+    return `<article class="cls-quiz-question" data-quiz-question="${esc(q.id)}"><div class="cls-quiz-question-head"><b>第 ${index + 1} 题</b><button type="button" class="cls-btn cls-ghost cls-sm" data-act="quiz-remove-question" aria-label="删除第 ${index + 1} 题">${svgIcon('trash')}删除</button></div>
+      <div class="cls-member-fields"><div class="cls-field"><label for="${prefix}-type">题型</label><select class="cls-input" id="${prefix}-type" data-q-field="type"><option value="single"${q.type === 'single' ? ' selected' : ''}>单选题</option><option value="boolean"${q.type === 'boolean' ? ' selected' : ''}>判断题</option></select></div><div class="cls-field"><label for="${prefix}-points">分值</label><input class="cls-input" id="${prefix}-points" type="number" min="1" max="100" data-q-field="points" value="${Number(q.points) || 10}"></div></div>
+      <div class="cls-field"><label for="${prefix}-stem">题目</label><textarea class="cls-textarea" id="${prefix}-stem" data-q-field="stem" rows="2" maxlength="2000" placeholder="请输入题目">${esc(q.stem || '')}</textarea></div>
+      <div class="cls-field" data-q-options${q.type === 'boolean' ? ' hidden' : ''}><label for="${prefix}-options">选项（每行一个，2–6 个）</label><textarea class="cls-textarea" id="${prefix}-options" data-q-field="options" rows="4" maxlength="6000" placeholder="选项 A&#10;选项 B">${esc((q.options || []).join('\n'))}</textarea></div>
+      <div class="cls-member-fields"><div class="cls-field"><label for="${prefix}-answer">标准答案</label><select class="cls-input" id="${prefix}-answer" data-q-field="answer">${options.map((o, i) => `<option value="${i}"${Number(q.answer) === i ? ' selected' : ''}>${String.fromCharCode(65 + i)}. ${esc(o || `选项 ${String.fromCharCode(65 + i)}`)}</option>`).join('')}</select></div></div>
+      <div class="cls-field"><label for="${prefix}-explanation">答案解析 <span class="cls-muted">选填</span></label><textarea class="cls-textarea" id="${prefix}-explanation" data-q-field="explanation" rows="2" maxlength="2000">${esc(q.explanation || '')}</textarea></div></article>`
+  }
+
+  function quizBuilderHtml(questions) {
+    const list = questions.length ? questions : [newQuizQuestion()]
+    return `<div class="cls-quiz-builder" data-quiz-builder><div data-quiz-questions>${list.map(quizQuestionHtml).join('')}</div><button type="button" class="cls-btn cls-ghost" data-act="quiz-add-question">${svgIcon('plus')}添加题目</button></div>`
+  }
+
+  function readQuizQuestions(builder, validate = true) {
+    const rows = Array.from(builder.querySelectorAll('[data-quiz-question]'))
+    if (validate && (!rows.length || rows.length > 50)) throw new Error('试卷需要 1–50 道题')
+    return rows.map((row, i) => {
+      const field = (key) => row.querySelector(`[data-q-field="${key}"]`).value
+      const type = field('type')
+      const options = type === 'boolean' ? ['正确', '错误'] : field('options').split('\n').map((s) => s.trim()).filter(Boolean)
+      const question = { id: row.dataset.quizQuestion, type, stem: field('stem').trim(), options, answer: Number(field('answer')), points: Number(field('points')), explanation: field('explanation').trim() }
+      if (validate) {
+        if (!question.stem) throw new Error(`请填写第 ${i + 1} 题的题目`)
+        if (options.length < 2 || options.length > 6) throw new Error(`第 ${i + 1} 题需要 2–6 个选项`)
+        if (options.some((o) => o.length > 1000)) throw new Error(`第 ${i + 1} 题的选项最多 1000 字`)
+        if (new Set(options).size !== options.length) throw new Error(`第 ${i + 1} 题的选项不能重复`)
+        if (!Number.isInteger(question.answer) || question.answer < 0 || question.answer >= options.length) throw new Error(`请设置第 ${i + 1} 题的标准答案`)
+        if (!Number.isInteger(question.points) || question.points < 1 || question.points > 100) throw new Error(`第 ${i + 1} 题分值需为 1–100 的整数`)
+      }
+      return question
+    })
+  }
+
+  function updateQuizAnswer(row) {
+    const type = row.querySelector('[data-q-field="type"]').value
+    const field = row.querySelector('[data-q-field="options"]')
+    row.querySelector('[data-q-options]').hidden = type === 'boolean'
+    const options = type === 'boolean' ? ['正确', '错误'] : field.value.split('\n').map((s) => s.trim()).filter(Boolean).slice(0, 6)
+    const answer = row.querySelector('[data-q-field="answer"]')
+    const previous = Number(answer.value)
+    answer.innerHTML = options.map((o, i) => `<option value="${i}">${String.fromCharCode(65 + i)}. ${esc(o)}</option>`).join('')
+    if (previous < options.length) answer.value = String(previous)
+  }
+
+  function changeQuizQuestions(button, remove) {
+    const builder = button.closest('[data-quiz-builder]')
+    if (!builder) return
+    const questions = readQuizQuestions(builder, false)
+    if (remove) {
+      const id = button.closest('[data-quiz-question]').dataset.quizQuestion
+      if (questions.length <= 1) return showToast('试卷至少保留一道题')
+      questions.splice(questions.findIndex((q) => q.id === id), 1)
+    } else {
+      if (questions.length >= 50) return showToast('每份试卷最多 50 道题')
+      questions.push(newQuizQuestion())
+    }
+    builder.querySelector('[data-quiz-questions]').innerHTML = questions.map(quizQuestionHtml).join('')
+    const next = remove ? builder.querySelector('[data-act="quiz-add-question"]') : builder.querySelector('[data-quiz-question]:last-child textarea')
+    next?.focus({ preventScroll: true })
   }
 
   // ── 创建表单的联动 ─────────────────────────────────────────
@@ -1297,7 +1528,55 @@
     })
     if (type === 'lab') fillLabHint(form)
     if (type === 'task') fillTaskOptions(form)
+    const label = form.querySelector('[data-create-label]')
+    if (label) label.textContent = type === 'quiz' ? '预览试卷' : '生成作业链接'
     suggestFields(form)
+  }
+
+  function editQuizModal(seed) {
+    const a = seed || S.assignment
+    if (!a || a.type !== 'quiz' || a.status !== 'draft') return
+    openModal(`<form class="cls-modal-form" data-form="edit-quiz" data-id="${esc(a.id)}" novalidate><input type="hidden" name="type" value="quiz"><div class="cls-modal-head"><h2>编辑试卷草稿</h2><button type="button" class="cls-icon-btn" data-act="close-modal" aria-label="关闭">${svgIcon('close')}</button></div><div class="cls-field"><label for="cls-edit-quiz-title">试卷名称</label><input class="cls-input" id="cls-edit-quiz-title" name="title" maxlength="120" value="${esc(a.title)}"></div><div class="cls-field"><label for="cls-edit-quiz-instructions">作业说明</label><textarea class="cls-textarea" id="cls-edit-quiz-instructions" name="instructions" maxlength="1000">${esc(a.instructions || '')}</textarea></div>${quizBuilderHtml(a.quiz?.questions || [])}<div class="cls-modal-actions"><button type="button" class="cls-btn cls-ghost" data-act="close-modal">取消</button><button type="submit" class="cls-btn cls-primary">预览修改</button></div></form>`)
+  }
+
+  function previewQuizSave(payload, assignmentId) {
+    const classId = S.classId
+    openModal(`<div class="cls-modal-head"><div><h2>${esc(payload.title)}</h2><p class="cls-modal-sub">${assignmentId ? '确认更新草稿' : payload.status === 'draft' ? '确认保存草稿，暂不开放给学生' : '确认发布，学生只能提交一次'}</p></div><button type="button" class="cls-icon-btn" data-act="close-modal" aria-label="关闭">${svgIcon('close')}</button></div><div class="cls-modal-body">${payload.instructions ? `<p>${esc(payload.instructions)}</p>` : ''}${quizPreviewHtml(payload.quiz.questions)}</div><p class="cls-inline-error" data-quiz-save-error role="alert"></p><div class="cls-modal-actions"><button type="button" class="cls-btn cls-ghost" data-quiz-back>返回编辑</button><button type="button" class="cls-btn cls-primary" data-quiz-save data-busy="create-assignment">${assignmentId ? '确认更新草稿' : payload.status === 'draft' ? '确认保存草稿' : '确认发布试卷'}</button></div>`, (el) => {
+      el.querySelector('[data-quiz-back]').addEventListener('click', () => {
+        if (assignmentId) editQuizModal({ ...payload, id: assignmentId, type: 'quiz', status: 'draft' })
+        else closeModal()
+      })
+      el.querySelector('[data-quiz-save]').addEventListener('click', () => withBusy('create-assignment', async () => {
+        try {
+          const path = `/api/classes/${encodeURIComponent(classId)}/assignments${assignmentId ? '/' + encodeURIComponent(assignmentId) : ''}`
+          const res = await api(path, { method: assignmentId ? 'PATCH' : 'POST', body: assignmentId ? { title: payload.title, instructions: payload.instructions, quiz: payload.quiz } : payload })
+          if (modalEl !== el) return
+          const id = assignmentId || res.assignment?.id
+          if (!id) throw new Error('试卷保存失败')
+          closeModal()
+          showToast(payload.status === 'open' ? '试卷已发布' : '试卷草稿已保存')
+          if (S.classId !== classId) return
+          const url = assignmentLink(classId, id)
+          if (window.location.hash !== url) window.location.hash = url
+          else await loadAssignment()
+        } catch (err) { if (modalEl === el) el.querySelector('[data-quiz-save-error]').textContent = err.message || '保存失败，请重试' }
+      }))
+    })
+  }
+
+  async function publishQuizFeedback(field) {
+    const a = S.assignment
+    if (!a || a.type !== 'quiz' || a[field]) return
+    const label = field === 'scoresPublished' ? '成绩' : '答案与解析'
+    if (!window.confirm(`向已提交这份试卷的学生公布${label}？公布后学生可在原作业链接查看。`)) return
+    const classId = S.classId
+    await withBusy('quiz-release', async () => {
+      try {
+        await api(`/api/classes/${encodeURIComponent(classId)}/assignments/${encodeURIComponent(a.id)}`, { method: 'PATCH', body: { [field]: true } })
+        showToast(`${label}已公布`)
+        if (S.assignment?.id === a.id && S.classId === classId) await loadAssignment()
+      } catch (err) { showToast(err.message || '公布失败') }
+    })
   }
 
   async function createAssignment(form) {
@@ -1307,6 +1586,13 @@
     if (!title) return showToast('请填写作业名称')
 
     const payload = { title, type, instructions: String(values.instructions || '').trim() }
+    if (type === 'quiz') {
+      try {
+        payload.quiz = { questions: readQuizQuestions(form.querySelector('[data-quiz-builder]')) }
+        payload.status = String(values.quizStatus || 'draft')
+        return previewQuizSave(payload, form.dataset.form === 'edit-quiz' ? form.dataset.id : '')
+      } catch (err) { return showToast(err.message) }
+    }
     if (type === 'lab') {
       const lab = labById(values.labId)
       if (!lab) return showToast('请选择互动练习')
@@ -1464,6 +1750,12 @@
     const id = btn.getAttribute('data-id') || ''
 
     if (act === 'close-modal') return closeModal()
+    if (act === 'edit-groups') return editGroupsModal()
+    if (act === 'quiz-add-question') return changeQuizQuestions(btn, false)
+    if (act === 'quiz-remove-question') return changeQuizQuestions(btn, true)
+    if (act === 'edit-quiz') return editQuizModal()
+    if (act === 'publish-quiz-scores') return publishQuizFeedback('scoresPublished')
+    if (act === 'publish-quiz-answers') return publishQuizFeedback('answersPublished')
     if (act === 'retry-classes') return loadClasses()
     if (act === 'retry-class') return loadClass()
     if (act === 'retry-assignment') return loadAssignment()
@@ -1498,6 +1790,7 @@
     if (act === 'toggle-assignment') {
       if (!S.assignment) return
       const next = S.assignment.status === 'open' ? 'closed' : 'open'
+      if (S.assignment.status === 'draft' && !window.confirm('发布这份试卷？发布后题目和答案不能再修改，学生只能提交一次。')) return
       withBusy('toggle-assignment', async () => {
         try {
           await api(
@@ -1598,18 +1891,22 @@
     }
 
     if (kind === 'add-members') return addMembers(form)
-    if (kind === 'create-assignment') return createAssignment(form)
+    if (kind === 'create-assignment' || kind === 'edit-quiz') return createAssignment(form)
     if (kind === 'rename-member') {
       const id = form.getAttribute('data-id') || ''
-      const name = String(readForm(form).name || '').trim()
+      const values = readForm(form)
+      const name = String(values.name || '').trim()
       if (!name) return showToast('请填写学生姓名')
+      const rawScore = String(values.score || '').trim()
+      const score = rawScore === '' ? null : Number(rawScore)
+      if (score != null && (!Number.isFinite(score) || score < 0 || score > 1000000)) return showToast('成绩需为有效的非负数字，或留空')
       withBusy('rename-member', async () => {
         try {
           await api(`/api/classes/${encodeURIComponent(S.classId)}/members/${encodeURIComponent(id)}`, {
             method: 'PATCH',
-            body: { name },
+            body: { name, studentNo: String(values.studentNo || '').trim() || null, gender: String(values.gender || '').trim() || null, score },
           })
-          showToast('姓名已更新')
+          showToast('学生资料已更新')
           closeModal()
           await loadClass()
         } catch (err) {
@@ -1620,6 +1917,7 @@
   }
 
   function onInput(e) {
+    if (e.target && e.target.dataset.qField === 'options') return updateQuizAnswer(e.target.closest('[data-quiz-question]'))
     if (e.target && e.target.id === 'cls-member-search') {
       S.filter = e.target.value
       refreshAssignmentView()
@@ -1629,6 +1927,7 @@
   function onChange(e) {
     const target = e.target
     if (!target) return
+    if (target.dataset.qField === 'type') return updateQuizAnswer(target.closest('[data-quiz-question]'))
     if (target.id === 'cls-status-filter') {
       S.statusFilter = target.value
       refreshAssignmentView()
@@ -2191,6 +2490,52 @@
 }
 @media (prefers-reduced-motion:reduce){
   .cls-studio-root *,.cls-modal-backdrop *,.cls-toast{animation:none!important;transition:none!important}
+}
+
+.cls-member-info{min-width:0;flex:1;display:flex;flex-direction:column;gap:3px}
+.cls-member-info small,.cls-student-no{display:block;color:var(--cls-mute);font-size:12px;overflow-wrap:anywhere}
+.cls-member-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.cls-member-fields>*{min-width:0}
+.cls-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.cls-groups-card{margin-top:18px}
+.cls-groups-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap}
+.cls-group-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.cls-group-card{min-width:0;border:1px solid var(--cls-border);background:var(--cls-soft);border-radius:14px;padding:16px}
+.cls-group-card h3{margin:0 0 12px;font-size:15px;overflow-wrap:anywhere}
+.cls-group-card p{display:flex;gap:6px;flex-wrap:wrap;margin:0}
+.cls-group-chip{display:inline-flex;align-items:baseline;gap:5px;padding:5px 9px;border-radius:8px;background:var(--cls-card);font-size:13px;overflow-wrap:anywhere}
+.cls-group-chip small{color:var(--cls-mute)}
+.cls-group-controls{display:grid;grid-template-columns:minmax(0,.7fr) minmax(0,1fr);gap:12px;align-items:end}
+.cls-group-controls label,.cls-group-names label{display:flex;flex-direction:column;gap:6px;font-size:13px;min-width:0}
+.cls-group-controls button{grid-column:1/-1;justify-self:start}
+.cls-group-names{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:16px 0}
+.cls-group-members{display:grid;gap:7px;margin:12px 0}
+.cls-group-member{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;align-items:center;padding:8px;border-bottom:1px solid var(--cls-border)}
+.cls-group-member>span{min-width:0;overflow-wrap:anywhere}
+.cls-group-member small{display:block;color:var(--cls-mute);font-size:12px}
+.cls-inline-error{color:var(--cls-danger);font-size:13px;line-height:1.6;margin:12px 0;white-space:pre-wrap}
+.cls-inline-error:empty{display:none}
+.cls-quiz-builder{min-width:0}
+.cls-quiz-question{display:grid;gap:12px;min-width:0;padding:16px;margin-bottom:12px;border:1px solid var(--cls-border);border-radius:14px;background:var(--cls-soft)}
+.cls-quiz-question [hidden]{display:none!important}
+.cls-quiz-question-head{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:13px;color:var(--cls-mute)}
+.cls-quiz-question .cls-field{min-width:0}
+.cls-quiz-release{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.cls-quiz-details summary{cursor:pointer;padding:10px 0;color:var(--cls-accent);font-weight:600}
+.cls-quiz-preview{margin:12px 0;padding:0;list-style:none;display:grid;gap:14px}
+.cls-quiz-preview>li{min-width:0;padding:16px;border:1px solid var(--cls-border);background:var(--cls-soft);border-radius:12px;overflow-wrap:anywhere}
+.cls-quiz-preview ul{list-style:none;padding:0;display:grid;gap:5px;font-size:14px}
+.cls-quiz-preview p{white-space:pre-wrap;line-height:1.65}
+.cls-quiz-stem{font-weight:600;color:var(--cls-text)}
+.cls-quiz-answer{font-weight:600;color:var(--cls-accent)}
+.cls-quiz-result{font-size:18px;font-weight:700;color:var(--cls-accent)}
+@media(max-width:600px){
+  .cls-member-fields,.cls-group-names{grid-template-columns:minmax(0,1fr)}
+  .cls-group-grid{grid-template-columns:minmax(0,1fr)}
+  .cls-quiz-question,.cls-quiz-preview>li{padding:12px}
+  .cls-groups-head>.cls-btn{width:100%}
+  .cls-group-controls{grid-template-columns:minmax(0,1fr)}
+  .cls-group-controls button{width:100%}
 }
 
 /* Injected links do not inherit Vue's compiled data-v scope attributes. */

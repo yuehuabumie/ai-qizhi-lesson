@@ -38,9 +38,9 @@ class CDP {
     return new CDP(ws)
   }
 
-  send(method, params = {}) {
+  send(method, params = {}, sessionId) {
     const id = ++this.seq
-    this.ws.send(JSON.stringify({ id, method, params }))
+    this.ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }))
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         if (this.waiters.delete(id)) reject(new Error(`CDP 超时: ${method}`))

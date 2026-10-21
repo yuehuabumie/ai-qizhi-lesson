@@ -57,6 +57,22 @@ const schema = z.object({
   AVATAR_MODERATION_MODEL: z.string().min(1).default('deepseek-flash'),
 
   APP_ORIGIN: z.string().url(),
+
+  // 智能备课默认关闭；先完成迁移及独立运行器配置，再显式启用。
+  PREP_ENABLED: bool(false),
+  PREP_WORKER_URL: z.string().url().default('http://127.0.0.1:3331'),
+  PREP_WORKER_SECRET: z.string().min(32).optional(),
+  PREP_STORAGE_DIR: z.string().default('.data/prep'),
+  // 与隔离运行器的25MiB硬上限一致，管理员可以按需调低。
+  PREP_MAX_FILE_MB: z.coerce.number().int().min(1).max(25).default(25),
+  PREP_USER_STORAGE_MB: z.coerce.number().int().min(25).default(250),
+  PREP_GLOBAL_STORAGE_MB: z.coerce.number().int().min(250).default(2048),
+  PREP_USER_HISTORY_MB: z.coerce.number().int().min(10).default(100),
+  PREP_GLOBAL_HISTORY_MB: z.coerce.number().int().min(100).default(1024),
+  PREP_MAX_QUEUED_RUNS: z.coerce.number().int().min(1).max(200).default(20),
+  PREP_DAILY_RUNS: z.coerce.number().int().min(1).default(10),
+  PREP_CONCURRENCY: z.coerce.number().int().min(1).max(4).default(1),
+  PREP_RUN_TIMEOUT_MINUTES: z.coerce.number().int().min(1).max(60).default(20),
 })
 
 const parsed = schema.safeParse(process.env)

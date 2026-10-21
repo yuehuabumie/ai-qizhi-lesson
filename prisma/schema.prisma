@@ -43,6 +43,8 @@ model User {
   works      Work[]
   likes      WorkLike[]
   classrooms Classroom[]
+  prepSessions PrepSession[]
+  prepSkills   PrepSkill[]
 
   @@map("users")
 }
@@ -161,27 +163,58 @@ model Classroom {
   owner       User         @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   members     ClassMember[]
   assignments Assignment[]
+  groups      ClassGroup[]
 
   @@unique([ownerId, name])
   @@index([ownerId, createdAt])
   @@map("classrooms")
 }
 
-/// 班级成员名单。姓名在班内唯一：作业链接只凭姓名认人，
-/// 同名会让两个学生落到同一条提交记录上，所以导入时就要求老师区分。
+/// 班级成员名单。同名成员必须提供不同学号，由服务端名单事务校验。
 model ClassMember {
   id        String   @id @default(cuid())
   classId   String   @db.VarChar(30)
   name      String   @db.VarChar(30)
+  studentNo String?  @db.VarChar(40)
+  gender    String?  @db.VarChar(20)
+  score     Float?
   createdAt DateTime @default(dbgenerated("(UTC_TIMESTAMP(3))"))
   updatedAt DateTime @updatedAt
 
   classroom   Classroom    @relation(fields: [classId], references: [id], onDelete: Cascade)
   submissions Submission[]
+  groupEntry  ClassGroupMember?
+
+  @@unique([classId, studentNo])
+  @@index([classId, name])
+  @@index([classId])
+  @@map("class_members")
+}
+
+model ClassGroup {
+  id        String   @id @default(cuid())
+  classId   String   @db.VarChar(30)
+  name      String   @db.VarChar(60)
+  createdAt DateTime @default(dbgenerated("(UTC_TIMESTAMP(3))"))
+  updatedAt DateTime @updatedAt
+
+  classroom Classroom          @relation(fields: [classId], references: [id], onDelete: Cascade)
+  members   ClassGroupMember[]
 
   @@unique([classId, name])
   @@index([classId])
-  @@map("class_members")
+  @@map("class_groups")
+}
+
+model ClassGroupMember {
+  groupId  String @db.VarChar(30)
+  memberId String @unique @db.VarChar(30)
+
+  group  ClassGroup  @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  member ClassMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@id([groupId, memberId])
+  @@map("class_group_members")
 }
 
 /// 一次作业对应一个不可猜测的公开链接。token 可轮换：
@@ -190,7 +223,7 @@ model Assignment {
   id           String   @id @default(cuid())
   classId      String   @db.VarChar(30)
   title        String   @db.VarChar(120)
-  /// storybook = AI 绘本创作；lab = 互动练习；task = 课程体系里的活动任务
+  /// storybook = AI 绘本；lab = 互动练习；task = 课程任务；quiz = 单选/判断试卷
   type         String   @db.VarChar(32) @default("storybook")
   instructions String   @db.VarChar(1000) @default("")
   /// type=lab 时对应的互动训练 id（如 device-detection）
@@ -201,8 +234,12 @@ model Assignment {
   activity     String?  @db.VarChar(120)
   /// type=task 时学生可以直接打开的配套工具台（同一模块学段下的训练）
   toolLabId    String?  @db.VarChar(40)
+  /// 试卷定义仅在教师接口完整返回；学生投影须过滤答案和解析。
+  quizJson     String?  @db.MediumText
+  scoresPublished  Boolean @default(false)
+  answersPublished Boolean @default(false)
   token        String   @unique @db.VarChar(64)
-  status       String   @db.VarChar(16) @default("open") // open | closed
+  status       String   @db.VarChar(16) @default("open") // draft | open | closed
   createdAt    DateTime @default(dbgenerated("(UTC_TIMESTAMP(3))"))
   updatedAt    DateTime @updatedAt
 
@@ -236,4 +273,120 @@ model Submission {
   @@unique([assignmentId, memberId])
   @@index([assignmentId, status])
   @@map("assignment_submissions")
+}
+
+/// 每个备课对话独立归属账号；不把其他会话历史自动带给模型。
+model PrepSession {
+  id          String   @id @default(cuid())
+  ownerId     String   @db.VarChar(30)
+  title       String   @db.VarChar(120) @default("新备课对话")
+  createdAt   DateTime @default(dbgenerated("(UTC_TIMESTAMP(3))"))
+  updatedAt   DateTime @updatedAt
+  owner       User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  messages    PrepMessage[]
+  events      PrepEvent[]
+  runs        PrepRun[]
+  attachments PrepAttachment[]
+  proposals   PrepProposal[]
+  @@index([ownerId, updatedAt])
+  @@map("prep_sessions")
+}
+
+model PrepMessage {
+  id            String   @id @default(cuid())
+  sessionId     String   @db.VarChar(30)
+  runId         String?  @db.VarChar(30)
+  role          String   @db.VarChar(16)
+  content       String   @db.LongText
+  attachmentIds String   @db.Text
+  createdAt     DateTime @default(dbgenerated("(UTC_TIMESTAMP(3))"))
+  session       PrepSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  @@index([sessionId, createdAt])
+  @@map("prep_messages")
+}
+
+model PrepEvent {
+  id        Int      @id @default(autoincrement())
+  sessionId String   @db.VarChar(30)
+  runId     String?  @db.VarChar(30)
+  type      String   @db.VarChar(32)
+  data      String   @db.LongText
+  createdAt DateTime @default(dbgenerated("(UTC_TIMESTAMP(3))"))
+  session   PrepSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  @@index([sessionId, id])
+  @@map("prep_events")
+}
+
+model PrepRun {
+  id               String    @id @default(cuid())
+  sessionId        String    @db.VarChar(30)
+  ownerId          String    @db.VarChar(30)
+  messageId        String    @db.VarChar(30)
+  workerCursor     Int       @default(0)
+  status           String    @db.VarChar(16) @default("queued")
+  error            String?   @db.VarChar(1000)
+  createdAt        DateTime  @default(dbgenerated("(UTC_TIMESTAMP(3))"))
+  startedAt        DateTime?
+  finishedAt       DateTime?
+  session          PrepSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  @@index([status, createdAt])
+  @@index([sessionId, createdAt])
+  @@index([ownerId, createdAt])
+  @@map("prep_runs")
+}
+
+model PrepAttachment {
+  id         String   @id @default(cuid())
+  sessionId  String   @db.VarChar(30)
+  ownerId    String   @db.VarChar(30)
+  name       String   @db.VarChar(200)
+  mime       String   @db.VarChar(120)
+  size       Int
+  kind       String   @db.VarChar(16) @default("upload")
+  storageKey String   @unique @db.VarChar(80)
+  createdAt  DateTime @default(dbgenerated("(UTC_TIMESTAMP(3))"))
+  session    PrepSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  @@index([ownerId, createdAt])
+  @@index([sessionId])
+  @@map("prep_attachments")
+}
+
+model PrepProposal {
+  id          String    @id @default(cuid())
+  sessionId   String    @db.VarChar(30)
+  ownerId     String    @db.VarChar(30)
+  runId       String    @db.VarChar(30)
+  callId      String    @db.VarChar(160)
+  tool        String    @db.VarChar(80)
+  description String    @db.VarChar(500)
+  payload     String    @db.LongText
+  version     String    @db.VarChar(64)
+  preview     String    @db.LongText
+  status      String    @db.VarChar(16) @default("pending")
+  result      String?   @db.LongText
+  expiresAt   DateTime
+  createdAt   DateTime  @default(dbgenerated("(UTC_TIMESTAMP(3))"))
+  session     PrepSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  @@index([sessionId, createdAt])
+  @@index([runId, status])
+  @@unique([runId, callId])
+  @@map("prep_proposals")
+}
+
+model PrepSkill {
+  id        String   @id @default(cuid())
+  ownerId   String   @db.VarChar(30)
+  name      String   @db.VarChar(80)
+  content   String   @db.Text
+  createdAt DateTime @default(dbgenerated("(UTC_TIMESTAMP(3))"))
+  updatedAt DateTime @updatedAt
+  owner     User @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  @@unique([ownerId, name])
+  @@map("prep_skills")
+}
+
+/// Singleton row locked during private-storage quota reservation.
+model PrepStorageLock {
+  id Int @id
+  @@map("prep_storage_lock")
 }
