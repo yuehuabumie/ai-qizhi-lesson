@@ -91,5 +91,13 @@ try {
       await browser.screenshot(`${process.env.E2E_OUTPUT}/prep-fullsite-welcome-${width}.png`)
     }
   }
+  await browser.setViewport(1366,900,{mobile:false})
+  await browser.evaluate(`document.querySelector('[data-prep-action=fullscreen]').click()`)
+  assert.ok(await browser.evaluate(`document.querySelector('[data-prep-root]').parentElement===document.body && document.querySelector('#app').inert`))
+  console.log('PASS fullscreen escapes compiled route containers and disables background controls');passed++
+  await browser.evaluate(`document.querySelector('.prep-heading-actions a[href="#/me/classes"]').click()`)
+  await browser.waitFor(`location.hash==='#/me/classes' && !document.querySelector('[data-prep-root]')`)
+  assert.ok(await browser.evaluate(`!document.querySelector('#app').inert && document.documentElement.style.overflow!== 'hidden'`))
+  console.log('PASS real Vue navigation exits fullscreen and restores the site');passed++
   console.log(`备课全站导航验收 ${passed}/${passed} 通过`)
 } finally {await browser.close();await new Promise(resolve=>server.close(resolve))}

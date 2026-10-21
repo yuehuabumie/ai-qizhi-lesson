@@ -43,12 +43,15 @@ try{
   await browser.evaluate(`document.cookie='private_preview_cookie=site-only; path=/';window.fetch=async(url,options={})=>{
     const p=new URL(url,location.href).pathname;
     if(p==='/api/prep/attachments/html-fixture')return new Response(${JSON.stringify(payload)},{headers:{'content-type':'text/html'}});
-    const detail={session:{id:'preview-session',title:'预览验收'},messages:[],events:[],proposals:[],attachments:[{id:'html-fixture',name:'互动计数.html',mime:'text/html',kind:'artifact',size:${Buffer.byteLength(payload)}}],activeRun:null};
+    const detail={session:{id:'preview-session',title:'预览验收'},messages:[{id:'preview-request',role:'user',content:'做一个互动实验。',attachmentIds:[],createdAt:'2026-10-21T00:00:00Z'},{id:'preview-answer',role:'assistant',runId:'preview-run',content:'互动实验已生成，可以预览或下载。',attachmentIds:[],createdAt:'2026-10-21T00:00:02Z'}],events:[],proposals:[],attachments:[{id:'html-fixture',name:'互动计数.html',mime:'text/html',kind:'artifact',size:${Buffer.byteLength(payload)},createdAt:'2026-10-21T00:00:01Z'}],activeRun:null};
     const data=p==='/api/prep/status'?{enabled:true,userId:'preview-teacher',model:'deepseek-flash',limits:{}}:p==='/api/prep/sessions'?{sessions:[detail.session]}:p==='/api/prep/skills'?{skills:[]}:detail;
     return new Response(JSON.stringify(data),{headers:{'content-type':'application/json'}})
   };${source};__previewTest.mount()`)
-  await browser.waitFor(`!!document.querySelector('[data-prep-preview="html-fixture"]')`)
-  await browser.setViewport(320,740,{mobile:true});await click('[data-prep-panel="activity"]');await click('.prep-activity [data-prep-preview="html-fixture"]')
+  await browser.waitFor(`!!document.querySelector('[data-prep-thread] [data-prep-preview="html-fixture"]')`)
+  await browser.setViewport(320,740,{mobile:true});await click('[data-prep-panel="sessions"]');await click('[data-prep-action="files"]')
+  await browser.waitFor(`!!document.querySelector('.prep-files-modal [data-prep-preview="html-fixture"]')`)
+  check('generated files are available from the mobile conversation sidebar',await browser.evaluate(`document.querySelector('.prep-files-modal').open&&document.querySelector('.prep-files-modal [data-prep-artifacts] a[download]').getAttribute('href')==='/api/prep/attachments/html-fixture'`))
+  await click('.prep-files-modal [data-prep-preview="html-fixture"]')
   await browser.waitFor(`!!document.querySelector('.prep-preview-frame')`)
   let evaluate;for(let i=0;i<50&&!evaluate;i++){evaluate=await child();if(!evaluate)await sleep(100)}
   assert.ok(evaluate,'The trusted wrapper must create the inner sandbox')
@@ -63,7 +66,7 @@ try{
     mkdirSync(process.env.E2E_OUTPUT,{recursive:true})
     for(const [width,height] of [[320,740],[390,844]]){
       await browser.setViewport(width,height,{mobile:true})
-      await browser.evaluate(`document.querySelector('.prep-modal').scrollTop=0;window.scrollTo(0,0)`)
+      await browser.evaluate(`document.querySelector('.prep-preview-modal').scrollTop=0;window.scrollTo(0,0)`)
       assert.ok(await browser.evaluate(`document.documentElement.scrollWidth<=${width}+1`))
       await browser.screenshot(`${process.env.E2E_OUTPUT}/prep-html-preview-${width}.png`)
     }
@@ -71,7 +74,14 @@ try{
   await evaluate(`location.href=${JSON.stringify(base+'/escape-navigation')}`);await sleep(350)
   check('hostile HTML cannot fetch resources or navigate the child frame onto a server',!seen.some(p=>/leak|escape/.test(p)))
   check('preview cannot modify the website document',await browser.evaluate(`!document.body.dataset.escaped&&document.cookie.includes('private_preview_cookie=site-only')`))
-  await click('[data-dialog-cancel]');await browser.waitFor(`!document.querySelector('.prep-modal')`)
-  check('closing preview removes its frames and restores the triggering focus',await browser.evaluate(`!document.querySelector('iframe')&&document.activeElement.matches('[data-prep-preview="html-fixture"]')`))
+  await click('.prep-preview-modal [data-dialog-cancel]');await browser.waitFor(`!!document.querySelector('.prep-files-modal')&&!document.querySelector('.prep-preview-modal')`)
+  check('closing a file-list preview returns to the file list and its preview control',await browser.evaluate(`!document.querySelector('iframe')&&document.querySelector('.prep-files-modal').contains(document.activeElement)&&document.activeElement.matches('[data-prep-preview="html-fixture"]')`))
+  await click('.prep-files-modal .prep-modal-head button');await browser.waitFor(`!document.querySelector('.prep-modal')`)
+  check('closing the file list restores focus to its sidebar entry',await browser.evaluate(`document.activeElement.matches('[data-prep-action="files"]')`))
+  await click('[data-prep-panel="chat"]');await click('[data-prep-thread] [data-prep-preview="html-fixture"]')
+  await browser.waitFor(`!!document.querySelector('.prep-preview-frame')`)
+  check('generated HTML also opens directly from its inline chat card',await browser.evaluate(`document.querySelector('.prep-preview-modal').open&&!document.querySelector('.prep-files-modal')&&document.querySelector('[data-prep-root]').dataset.panel==='chat'`))
+  await click('.prep-preview-modal [data-dialog-cancel]');await browser.waitFor(`!document.querySelector('.prep-modal')`)
+  check('closing an inline preview removes its frames and restores focus to the chat card',await browser.evaluate(`!document.querySelector('iframe')&&document.querySelector('[data-prep-thread]').contains(document.activeElement)&&document.activeElement.matches('[data-prep-preview="html-fixture"]')`))
   console.log(`互动网页预览验收 ${passed}/${passed} 通过`)
 }finally{await browser.close();await new Promise(ok=>server.close(ok))}
