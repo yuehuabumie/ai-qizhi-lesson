@@ -12,7 +12,12 @@ import { randomBytes } from 'node:crypto'
 import { access, mkdtemp, writeFile, rm, realpath, lstat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
-import { DeepSeekHarness } from '@deepseek-ai/dsh-sdk-client'
+let engineModule
+for (const candidate of [new URL('./runtime-engine.mjs', import.meta.url), new URL('../runtime-engine.mjs', import.meta.url)]) {
+  try { await access(candidate); engineModule = candidate; break } catch {}
+}
+assert.ok(engineModule, 'The fixture requires runtime-engine.mjs beside it or in its parent directory')
+const { Agent: DeepSeekHarness } = await (await import(engineModule.href)).loadRuntime()
 
 const MODEL='deepseek-flash', KEY_ENV='AIQ_OFFLINE_MCP_KEY'
 const MODEL_KEY='offline-mcp-fixture-not-a-provider-key'

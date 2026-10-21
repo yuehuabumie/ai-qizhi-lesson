@@ -8,3 +8,5 @@ prisma/migrations/dev.db*
 site/uploads/
 site-*/
 .data/
+agent-runtime/aiq-agent/vendor/*/lib/
+agent-runtime/aiq-agent/.aiq-agent/

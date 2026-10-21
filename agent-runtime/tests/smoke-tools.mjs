@@ -13,7 +13,12 @@ import { access, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { DeepSeekHarness } from '@deepseek-ai/dsh-sdk-client'
+let engineModule
+for (const candidate of [new URL('./runtime-engine.mjs', import.meta.url), new URL('../runtime-engine.mjs', import.meta.url)]) {
+  try { await access(candidate); engineModule = candidate; break } catch {}
+}
+assert.ok(engineModule, 'The fixture requires runtime-engine.mjs beside it or in its parent directory')
+const { Agent: DeepSeekHarness } = await (await import(engineModule.href)).loadRuntime()
 
 const MODEL='deepseek-flash'
 const KEY_ENV='AIQ_OFFLINE_SMOKE_KEY'

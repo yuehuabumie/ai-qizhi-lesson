@@ -1,5 +1,7 @@
 import { readFile,writeFile,mkdir,stat,rm } from 'node:fs/promises'
-import { DeepSeekHarness,validatedSessionEvent } from '@deepseek-ai/dsh-sdk-client'
+import { loadRuntime } from './runtime-engine.mjs'
+
+const { Agent,validatedSessionEvent }=await loadRuntime()
 
 const input=JSON.parse(await readFile('/state/input.json','utf8'))
 const send=(type,data)=>process.stdout.write(JSON.stringify({type,data})+'\n')
@@ -25,7 +27,7 @@ for(const server of input.mcpServers||[]){
   patch.push({insert:[{id:'aiq-mcp-'+server.name,name:'@deepseek-ai/dsh-mcp-client',config:{serverName:server.name,transport:'streamable-http',url:`${process.env.PREP_BROKER_URL}/jobs/${process.env.PREP_RUN_ID}/mcp/${server.name}`,headers:{Authorization:`Bearer ${process.env.PREP_JOB_TOKEN}`},toolCallTimeoutMs:60000}}]})
 }
 await writeFile('/tmp/lesson.patch.yml',JSON.stringify(patch))
-const harness=new DeepSeekHarness({profile:'sdk',patches:['/tmp/lesson.patch.yml'],dshHome:'/state/dsh',processCwd:'/work',cwd:'/work',model:'deepseek-flash',provider:'deepseek-official',maxTokens:16384,initializeTimeoutMs:60000})
+const harness=new Agent({profile:'sdk',patches:['/tmp/lesson.patch.yml'],dshHome:'/state/dsh',processCwd:'/work',cwd:'/work',model:'deepseek-flash',provider:'deepseek-official',maxTokens:16384,initializeTimeoutMs:60000})
 let resumed=false
 try{await stat('/state/resumable');resumed=true}catch{}
 try{

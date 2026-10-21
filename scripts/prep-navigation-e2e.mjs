@@ -33,6 +33,7 @@ const server = createServer(async(req, res) => {
     const data = path === '/api/auth/me' ? { user: { id:'teacher-nav', nickname:'这是一个很长的教师昵称用于导航测试', email:'teacher@example.test', avatarHue:210, avatarUrl:null, quizBest:0 } }
       : path === '/api/prep/status' ? { enabled:true,userId:'teacher-nav',model:'deepseek-flash',limits:{} }
       : path === '/api/prep/sessions' ? {sessions}
+      : path === '/api/classes' ? {classes:[{id:'layout-class',name:'三年级 1 班',members:32,assignments:3,createdAt:'2026-10-21T00:00:00Z'}]}
       : { progress:[],sessions:[],works:[],total:0,stats:{},quizBest:0 }
     res.writeHead(200, {'content-type':'application/json'});res.end(JSON.stringify(data));return
   }
@@ -47,6 +48,22 @@ const base='http://127.0.0.1:'+server.address().port
 const browser=await launch()
 let passed=0
 try {
+  await browser.page.send('Page.addScriptToEvaluateOnNewDocument',{source:`window.__navigationErrors=[];addEventListener('error',event=>__navigationErrors.push(event.message));addEventListener('unhandledrejection',event=>__navigationErrors.push(String(event.reason?.message||event.reason)))`})
+  for(const width of [1366,375]) for(const target of ['prep','classes']) {
+    await browser.setViewport(width,900,{mobile:width<1024})
+    await browser.goto(base+'/#/teach',`!!document.querySelector('[data-teach-entry="${target}"]') && !!document.querySelector('.teach-tabs')`)
+    await browser.evaluate(`window.__leavingToolbox=document.querySelector('.teach-tabs').parentElement`)
+    const point=await browser.evaluate(`(()=>{const link=document.querySelector('[data-teach-entry="${target}"]');link.scrollIntoView({block:'center'});const rect=link.getBoundingClientRect();return {x:rect.left+rect.width/2,y:rect.top+rect.height/2}})()`)
+    await browser.page.send('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount:1})
+    await browser.page.send('Input.dispatchMouseEvent',{type:'mouseReleased',...point,button:'left',clickCount:1})
+    const transition=await browser.evaluate(`new Promise(resolve=>{const frames=[];function sample(){const leaving=window.__leavingToolbox;if(!leaving.isConnected||frames.length>=60){resolve(frames);return}frames.push({layout:leaving.dataset.teachSection,hub:!!leaving.querySelector('[data-teach-hub]')});requestAnimationFrame(sample)}sample()})`)
+    assert.ok(transition.length>0 && transition.every(frame=>frame.layout==='teach'&&frame.hub),`toolbox keeps its updated layout throughout ${width}px transition to ${target}: ${JSON.stringify(transition)}`)
+    await browser.waitFor(`document.querySelector('[data-teach-section="${target}"] [data-teach-entry="${target}"][aria-current=page]') && !document.querySelector('.teach-tabs')`)
+    await browser.evaluate(`new Promise(resolve=>setTimeout(resolve,400))`)
+    assert.deepEqual(await browser.evaluate(`window.__navigationErrors`),[],`direct toolbox navigation to ${target} has no runtime errors`)
+    console.log(`PASS direct toolbox pointer navigation to ${target} at ${width}px without reverting its outgoing layout`);passed++
+  }
+  await browser.setViewport(1366,900,{mobile:false})
   await browser.goto(base+'/#/',`document.querySelectorAll('header.aiq-navbar nav a').length===8 && !document.querySelector('[data-prep-nav],[data-cls-nav-tab]') && document.querySelector('header.aiq-navbar').textContent.includes('这是一个很长')`)
   for(const width of [1024,1100,1152,1200,1279,1280,1366,1440,1535]){
     await browser.setViewport(width,900,{mobile:false})
@@ -79,7 +96,7 @@ try {
   assert.ok(mobileHub.links.length===3&&mobileHub.links.every(l=>l.h>=44&&l.right<=391),`mobile teaching hub targets too small: ${JSON.stringify(mobileHub)}`)
   console.log('PASS three-entry teaching hub remains usable at 390px');passed++
   await browser.evaluate(`document.querySelector('header.aiq-navbar button[class~="lg:hidden"]').click()`)
-  await browser.waitFor(`!!document.querySelector('.el-drawer__body a[href="#/teach"]') && getComputedStyle(document.querySelector('.el-overlay')).display!=='none'`)
+  await browser.waitFor(`document.querySelector('.el-drawer__body a[href="#/teach"]')?.getAttribute('aria-current')==='page' && getComputedStyle(document.querySelector('.el-overlay')).display!=='none'`)
   assert.ok(await browser.evaluate(`(()=>{const d=document.querySelector('.el-drawer__body'),t=d.querySelector('a[href="#/teach"]');return d.querySelectorAll('a[href="#/teach"]').length===1 && !d.querySelector('a[href="#/prep"],a[href="#/me/classes"]') && t.classList.contains('is-active') && t.getAttribute('aria-current')==='page' && d.querySelectorAll('[data-prep-nav],[data-cls-nav-tab]').length===0})()`))
   console.log('PASS mobile drawer keeps 课堂教学 as the only teaching entry and marks it current');passed++
   await browser.page.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
@@ -127,5 +144,35 @@ try {
   await browser.waitFor(`location.hash==='#/prep' && !!document.querySelector('[data-prep-root] .prep-wrap [data-teach-hub] a[aria-current="page"]') && document.querySelector('[data-teach-hub] a[aria-current="page"]').getAttribute('href')==='#/prep'`)
   assert.ok(await browser.evaluate(`document.querySelector('header.aiq-navbar a[href="#/teach"]').getAttribute('aria-current')==='page' && document.querySelectorAll('[data-prep-nav],[data-cls-nav-tab]').length===0`))
   console.log('PASS 智能备课 opens from the hub with 课堂教学 highlighted');passed++
+  for (const [section, route] of [['teach','/teach'],['prep','/prep'],['classes','/me/classes']]) {
+    await browser.goto(base+'/#'+route,`document.querySelector('[data-teach-section="${section}"] > [data-teach-hub]') && document.querySelector('[data-teach-hub] [aria-current=page]')?.dataset.teachEntry==='${section}'`)
+    if(section==='classes') await browser.waitFor(`!!document.querySelector('.cls-class-card')`)
+    if(section==='teach') {
+      const toolCount = await browser.evaluate(`document.querySelectorAll('.teach-tabs [role=tab]').length`)
+      assert.equal(toolCount,6)
+      for(let index=0;index<toolCount;index++) {
+        await browser.evaluate(`document.querySelectorAll('.teach-tabs [role=tab]')[${index}].click()`)
+        await browser.waitFor(`document.querySelectorAll('.teach-tabs [role=tab]')[${index}].getAttribute('aria-selected')==='true'`)
+        assert.ok(await browser.evaluate(`(()=>{const tab=document.querySelectorAll('.teach-tabs [role=tab]')[${index}],panel=document.getElementById(tab.getAttribute('aria-controls'));return panel&&getComputedStyle(panel).display!=='none'&&document.querySelector('[data-teach-entry=teach]').getAttribute('aria-current')==='page'})()`))
+        console.log(`PASS toolbox secondary tab ${index+1} remains interactive`);passed++
+      }
+      await browser.evaluate(`document.querySelector('.teach-tabs [role=tab]').click()`)
+    }
+    for (const dark of [false,true]) {
+      await browser.evaluate(`document.documentElement.classList.toggle('dark',${dark})`)
+      for (const width of [320,375,844,1366]) {
+        await browser.setViewport(width,width===844?390:900,{mobile:width<1024})
+        const layout = await browser.evaluate(`(()=>{const container=document.querySelector('[data-teach-section]'),hub=container.querySelector('[data-teach-hub]'),bounds=hub.getBoundingClientRect(),title=container.querySelector('h1,h2'),titleBounds=title?.getBoundingClientRect();return {width:document.documentElement.scrollWidth,left:bounds.left,right:bounds.right,top:bounds.top,bottom:bounds.bottom,titleTop:titleBounds?.top,first:container.firstElementChild===hub,links:[...hub.querySelectorAll('a')].map(link=>{const rect=link.getBoundingClientRect();return {left:rect.left,right:rect.right,height:rect.height}})}})()`)
+        assert.ok(layout.first && layout.width<=width+1 && layout.left>=0 && layout.right<=width+1 && layout.links.every(link=>link.left>=0&&link.right<=width+1&&link.height>=44),`${section} ${width}px ${dark?'dark':'light'} teaching layout: ${JSON.stringify(layout)}`)
+        assert.ok(layout.titleTop>=layout.bottom-1,`${section} page title follows shared navigation`)
+        console.log(`PASS unified ${section} layout ${width}px ${dark?'dark':'light'}`);passed++
+        if(process.env.E2E_OUTPUT && [375,1366].includes(width)) {
+          await browser.evaluate('window.scrollTo(0,0)')
+          await browser.evaluate(`Promise.allSettled(document.getAnimations().filter(animation=>animation.effect?.getTiming().iterations!==Infinity).map(animation=>animation.finished))`)
+          await browser.screenshot(`${process.env.E2E_OUTPUT}/teaching-${section}-${width}-${dark?'dark':'light'}.png`)
+        }
+      }
+    }
+  }
   console.log(`备课全站导航验收 ${passed}/${passed} 通过`)
 } finally {await browser.close();await new Promise(resolve=>server.close(resolve))}

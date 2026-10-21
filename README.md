@@ -1,5 +1,9 @@
 # AI 启智课
 
+2026-10-21 课堂教学统一布局及备课模块重构已发布，当前生产版本 `3kYzRd3N`，包含布局闪回修复、“正在加载智能体”提示和紧凑右对齐的发送按钮；备份、验证和维护边界见 [最新发布记录](./docs/DEPLOYMENT-TEACHING-LAYOUT-2026-10-21.md)。
+
+自有智能体源码裁剪版位于 `agent-runtime/aiq-agent/`，仍处于本地兼容性验证阶段，未部署替换线上 DSH，详见该目录 README。
+
 小学人工智能通识课教学平台，面向 1–6 年级。线上站点：[yuehua.online](https://yuehua.online)。
 
 **本仓库是服务器项目快照：Fastify 后端源码、已构建的 Vue 网站，以及独立运行时前端模块。仓库不含完整 Vue/Vite 开发源码。** 根目录 `src/` 是后端，`npm run dev` 启动 API；这里没有 `npm run build` 或 Vite 开发服务器。
@@ -29,6 +33,7 @@ src/                 Fastify 后端：routes/ 与 lib/
 prisma/              数据库模型
 scripts/             API/UI 验收、运行时前端模块、安装与产物补丁
 scripts/lib/         验收工具、Chromium CDP 驱动、响应式测量
+scripts/prep/        智能备课模块源码、教学导航和独立 CSS
 site/                已构建的 Vue 网站；assets/ 包含入口与视图 chunk
 site/uploads/        运行时用户上传内容（被 Git 忽略，部署必须保留）
 docs/                本轮界面验收记录
@@ -76,6 +81,11 @@ npm run dev
 - `gallery-studio.js`：展厅列表、详情和个人作品挑选发布。
 - `me-studio.js`：个人资料、头像、密码和个人作品。
 - `responsive-shell.js`：共享导航、表单、课程页与训练页等移动布局补充。
+- `prep-studio.js`：备课启动入口；实际实现位于 `scripts/prep/`，请求、轮次归组、弹窗、HTML 沙箱、教学导航和样式分别维护。
+
+备课模块采用原生 ES modules 组织源码，由固定版本 esbuild 打包。安装前需要完整开发依赖（`npm ci`），执行 `node scripts/install-prep-studio.mjs` 会生成包含 Markdown 解析器和 CSS 的单个 `site/assets/prep-studio.js`，并更新 HTML 内容版本。不要只把 `scripts/prep-studio.js` 入口复制到站点，也不要直接编辑生成文件；这不包含完整 Vue 网站的重新构建。
+
+`npm run frontend:check` 检查备课打包与请求契约；`npm run frontend:test` 串行运行这些检查和五组本地浏览器回归，使用模拟接口，不访问生产账号。Windows 自动查找 Edge/Chrome，也可通过 `E2E_BROWSER` 指定路径；Linux 沿用 CDP 工具的 Chromium 默认路径。测试通过明确的工厂接口创建页面，不再通过正则改写生产源码注入测试钩子；生产包不含测试入口。
 
 安装脚本会把模块复制到 `site/assets/`，并更新 `site/index.html` 的内容哈希参数，避免旧缓存。**编辑 `scripts/` 后必须运行对应安装脚本，线上才会使用新内容。** 仅改静态模块不需要重启 API 或 reload nginx。
 

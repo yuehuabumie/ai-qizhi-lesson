@@ -115,7 +115,7 @@ async function run(j,request){
     const saved=join(root,'sessions',j.sessionId+'.tgz')
     try{const meta=JSON.parse(await readFile(join(root,'sessions',j.sessionId+'.json'),'utf8'));if(meta.ownerId!==j.ownerId)throw new Error('会话归属不一致');await docker(['exec','-i',j.container,'tar','--no-same-owner','-xzf','-','-C','/'],{stdin:createReadStream(saved),timeout:60000})}catch(e){if(e.code!=='ENOENT')throw e}
     await docker(['exec','-i',j.container,'sh','-c','cat > /state/input.json'],{stdin:JSON.stringify({...request,files,skills:source.skills||[],history:source.history||[],mcpServers:mcpProxy.descriptors(j,`http://${gateway}:3330`)})})
-    emit(j,'status',{status:'running',message:'正在运行 DeepSeek Harness'})
+    emit(j,'status',{status:'running',message:'正在加载智能体'})
     await docker(['exec',j.container,'node','/app/runner.mjs'],{timeout:request.timeoutMinutes*60000,maxBytes:12*1024**2,onLine(line){
       let v;try{v=JSON.parse(line)}catch{return}
       if(v.type==='done')j.response=typeof v.data?.response==='string'?v.data.response.slice(0,200000):''

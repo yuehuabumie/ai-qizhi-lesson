@@ -4,11 +4,7 @@ import { readFileSync, mkdirSync } from 'node:fs'
 import { launch } from './lib/cdp-kit.mjs'
 import { prepBrowserSource } from './lib/prep-browser-source.mjs'
 
-const source = prepBrowserSource()
-  .replace('  boot().catch((e) =>', '  Promise.resolve().catch((e) =>')
-  .replace(/\}\)\(\)\s*$/, `
-    globalThis.__prepTest = { mount(id='') {mountPage({$el:null},id)}, openSession, poll, unmountPage };
-  })()`)
+const source = prepBrowserSource({ harness: 'studio' })
 const lessonMarkdown = `## 科学探究教案
 
 请**核对名单**，再确认创建。
@@ -104,7 +100,7 @@ try {
       const parts=p.split('/');const match=parts[1]==='api'&&parts[2]==='prep'&&parts[3]==='sessions'?[p,parts[4],parts[5]]:null;
       if(match){const id=match[1],part=match[2],detail=__details[id];if(!detail)return __reply({error:{message:'对话不存在'}},404);
         if(part==='attachments'){if(__uploadFailures-- > 0)return __reply({error:{message:'网络断开，请重试'}},503);const a={id:'up'+(++__uploadCount),name:url.searchParams.get('filename'),size:body.size,mime:body.type,kind:'upload'};detail.attachments.push(a);return __reply({attachment:a});}
-        if(part==='messages'){const id='user'+__requests.length;detail.messages.push({id,role:'user',runId:'r1',content:body.content,attachmentIds:body.attachmentIds,createdAt:new Date().toISOString()});detail.activeRun={id:'r1',messageId:id,status:'queued',createdAt:new Date().toISOString()};return __reply({runId:'r1',status:'queued'});}
+        if(part==='messages'){if(window.__deferSend)await new Promise(resolve=>{window.__finishSend=resolve});if(window.__sendFailure)return __reply({error:{message:'旧对话发送失败'}},503);const id='user'+__requests.length;detail.messages.push({id,role:'user',runId:'r1',content:body.content,attachmentIds:body.attachmentIds,createdAt:new Date().toISOString()});detail.activeRun={id:'r1',messageId:id,status:'queued',createdAt:new Date().toISOString()};return __reply({runId:'r1',status:'queued'});}
         if(part==='cancel'){if(window.__deferCancel){detail.activeRun.status='cancelling';return new Promise(resolve=>{window.__finishCancel=()=>{detail.activeRun.status='cancelled';resolve(__reply({run:detail.activeRun}))}})}detail.activeRun.status='cancelled';return __reply({run:detail.activeRun});}
         if(part==='events'&&window.__eventPages?.length){const next=window.__eventPages.shift();detail.hasMore=next.hasMore;detail.events.push(...next.events);return __reply({...detail,events:next.events,hasMore:next.hasMore});}
         if(method==='DELETE'){if(__deleteFailure)return __reply({error:{message:'删除暂时失败'}},503);delete __details[id];__sessions=__sessions.filter(s=>s.id!==id);return __reply({ok:true});}
@@ -288,6 +284,7 @@ try {
       await browser.evaluate(`document.documentElement.classList.toggle('dark',${theme==='dark'})`)
       await settleTransitions()
       await check(`preparation layout fits ${width}px ${theme}`, `document.documentElement.scrollWidth<=${width}+1 && document.querySelector('.prep-layout').getBoundingClientRect().right<=${width}+1 && (innerWidth>=640 || getComputedStyle(document.querySelector('.prep-sidebar')).display==='none') && [...document.querySelectorAll('.prep-chat :is(button,textarea)')].filter(e=>e.getClientRects().length).every(e=>e.getBoundingClientRect().right<=${width}+1)`)
+      await check(`send action stays compact and right aligned at ${width}px ${theme}`, `(()=>{const send=document.querySelector('[data-prep-send]').getBoundingClientRect(),input=document.querySelector('#prep-message').getBoundingClientRect(),attach=document.querySelector('[data-prep-action="attach"]').getBoundingClientRect();return send.width>=80 && send.width<=96 && send.height>=44 && Math.abs(send.right-input.right)<=1 && attach.right+8<=send.left && Math.abs(attach.top-send.top)<=1})()`)
       await check(`Markdown and generated files remain bounded at ${width}px ${theme}`, `(()=>{const thread=document.querySelector('[data-prep-thread]').getBoundingClientRect();return [...document.querySelectorAll('[data-prep-thread] :is(table,pre,.prep-artifact-card)')].every(e=>e.getBoundingClientRect().right<=thread.right+1) && document.querySelector('[data-prep-thread] [data-prep-artifact="f1"] a.is-artifact').getBoundingClientRect().height>=44})()`)
       await check(`download controls and Markdown links retain readable contrast at ${width}px ${theme}`, `(()=>{
         const rgb=value=>(value.match(/[\\d.]+/g)||[]).map(Number);
@@ -318,13 +315,34 @@ try {
   await browser.evaluate(`(()=>{const t=document.querySelector('#prep-message');window.__composeBefore=__requests.filter(r=>r.p.endsWith('/messages')).length;window.__composeNotPrevented=t.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',keyCode:229,isComposing:true,bubbles:true,cancelable:true}))})()`)
   await browser.evaluate(`new Promise(r=>setTimeout(r,80))`)
   await check('Enter during IME composition is left to the input method', `window.__composeNotPrevented===true && __requests.filter(r=>r.p.endsWith('/messages')).length===window.__composeBefore`)
+  await browser.evaluate(`{const input=document.querySelector('#prep-message');window.__imeGuards=[{isComposing:true,keyCode:13},{isComposing:false,keyCode:229}].map(options=>input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',bubbles:true,cancelable:true,...options})))}`)
+  await browser.evaluate(`new Promise(resolve=>setTimeout(resolve,80))`)
+  await check('composition flag and legacy keyCode independently prevent sending', `__imeGuards.every(Boolean) && __requests.filter(r=>r.p.endsWith('/messages')).length===window.__composeBefore`)
   await browser.evaluate(`(()=>{const t=document.querySelector('#prep-message');t.value='回车发送测试';t.dispatchEvent(new Event('input',{bubbles:true}));t.focus();t.setSelectionRange(t.value.length,t.value.length);window.__enterBefore=__requests.filter(r=>r.p.endsWith('/messages')).length})()`)
   await enter(false)
   await browser.waitFor(`document.querySelector('#prep-message').value==='' && __details.s2.messages.some(m=>m.content==='回车发送测试')`)
   await check('Enter sends the message without adding a newline', `__requests.filter(r=>r.p.endsWith('/messages')).length===window.__enterBefore+1 && __details.s2.messages.at(-1).content==='回车发送测试'`)
-  await browser.evaluate(`__enabled=false;__details.s2.activeRun=null;__details.s2.messages=[];__details.s2.events=[];__prepTest.mount('s2')`)
+  await browser.evaluate(`__details.s2.activeRun=null;__deferSend=true;__prepTest.mount('s2')`)
+  await browser.waitFor(`!document.querySelector('#prep-message').disabled && !document.querySelector('[data-prep-send]').getAttribute('aria-busy')?.includes('true')`)
+  await browser.evaluate(`{const input=document.querySelector('#prep-message');input.value='第一条需求';input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('[data-prep-send]').click()}`)
+  await browser.waitFor(`typeof __finishSend==='function'`)
+  await browser.evaluate(`{const input=document.querySelector('#prep-message');input.value='等待时继续编辑的下一条需求';input.dispatchEvent(new Event('input',{bubbles:true}));__finishSend();__deferSend=false}`)
+  await browser.waitFor(`document.querySelector('[data-prep-send]').getAttribute('aria-busy')==='false'`)
+  await check('a successful send preserves text edited while its request was pending', `document.querySelector('#prep-message').value==='等待时继续编辑的下一条需求'`)
+  await browser.evaluate(`__details.s2.activeRun=null;__deferSend=true;delete window.__finishSend;__prepTest.mount('s2')`)
+  await browser.waitFor(`!document.querySelector('#prep-message').disabled`)
+  await browser.evaluate(`{const input=document.querySelector('#prep-message');input.value='即将离开的对话';input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('[data-prep-send]').click()}`)
+  await browser.waitFor(`typeof __finishSend==='function'`)
+  await browser.evaluate(`__prepTest.openSession('s1')`)
+  await browser.waitFor(`document.querySelector('[data-prep-title]').textContent==='科学探究课'`)
+  await browser.evaluate(`__sendFailure=true;__finishSend();__deferSend=false`)
+  await browser.waitFor(`document.querySelector('[data-prep-send]').getAttribute('aria-busy')==='false'`)
+  await check('a late send failure cannot display an error in another conversation', `document.querySelector('[data-prep-error]').hidden`)
+  await browser.evaluate(`__sendFailure=false;__enabled=false;__details.s2.activeRun=null;__details.s2.messages=[];__details.s2.events=[];__prepTest.mount('s2')`)
   await browser.waitFor(`!document.querySelector('[data-prep-disabled]').hidden`)
   await check('an unconfigured runtime is clearly disabled without simulated AI activity', `document.querySelector('[data-prep-send]').disabled && document.querySelector('[data-prep-disabled]').textContent.includes('尚未启用') && !document.querySelector('[data-prep-stream]')`)
+  await browser.evaluate(`location.hash='#/prep';__prepTest.mount('');window.__initialPrepLayout=(()=>{const wrap=document.querySelector('[data-prep-root] .prep-wrap');return wrap?.dataset.teachSection==='prep'&&wrap.firstElementChild?.matches('[data-teach-hub]')})()`)
+  await check('preparation mounts with its shared navigation and final layout synchronously', `window.__initialPrepLayout===true`)
   if(process.env.E2E_OUTPUT){mkdirSync(process.env.E2E_OUTPUT,{recursive:true});await browser.screenshot(process.env.E2E_OUTPUT+'/prep-phone.png')}
   console.log(`智能备课组件验收 ${passed}/${passed} 通过`)
 } finally { await browser.close() }

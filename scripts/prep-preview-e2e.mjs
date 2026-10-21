@@ -14,7 +14,7 @@ let p=false,c=false;try{parent.document.body.dataset.escaped='yes'}catch{p=true}
 document.body.dataset.parentBlocked=String(p);document.body.dataset.cookieBlocked=String(c);
 fetch('${base}/leak-fetch').catch(()=>{});
 </script>`
-const source=prepBrowserSource().replace('  boot().catch((e) =>','  Promise.resolve().catch((e) =>').replace(/\}\)\(\)\s*$/,`globalThis.__previewTest={mount(){mountPage({$el:null},'preview-session')}};})()`)
+const source=prepBrowserSource({ harness: 'preview' })
 const browser=await launch();let passed=0
 const frameSessions=new Map()
 const check=(name,value)=>{assert.ok(value,name);console.log('PASS '+name);passed++}

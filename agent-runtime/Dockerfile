@@ -7,7 +7,7 @@ RUN python3 -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir python
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund && node node_modules/@deepseek-ai/dsh-subprocess-local/scripts/ensure-spawn-helper.mjs
-COPY runner.mjs lesson-plugin.mjs ./
+COPY runner.mjs lesson-plugin.mjs runtime-engine.mjs ./
 RUN mkdir -p /work /state /tmp && chown -R 1000:1000 /work /state
 USER 1000:1000
 ENV HOME=/state DSH_HOME=/state/dsh DSH_PERMISSION_MODE=danger-full-access DSH_PRIMARY_RUNTIME="" NODE_USE_ENV_PROXY=1
